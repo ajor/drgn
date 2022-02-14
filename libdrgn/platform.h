@@ -6,6 +6,7 @@
 
 #include <gelf.h>
 #include <inttypes.h>
+#include <sys/user.h>
 
 #include "cfi.h"
 #include "drgn.h"
@@ -155,6 +156,9 @@ struct drgn_architecture_info {
 	struct drgn_error *(*prstatus_get_initial_registers)(struct drgn_program *,
 							     const void *,
 							     size_t,
+							     struct drgn_register_state **);
+	struct drgn_error *(*user_regs_struct_get_initial_registers)(struct drgn_program *,
+							     const struct user_regs_struct *,
 							     struct drgn_register_state **);
 	struct drgn_error *(*linux_kernel_get_initial_registers)(const struct drgn_object *,
 								 struct drgn_register_state **);

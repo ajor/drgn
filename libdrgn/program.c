@@ -1952,7 +1952,7 @@ drgn_traverse_die_for_pc(Dwarf_Die die, Dwarf_Addr pc_addr, Dwarf_Die *ret) {
 LIBDRGN_PUBLIC struct drgn_error *
 drgn_program_find_type_by_symbol_name(struct drgn_program *prog,
 				      const char* name, struct drgn_qualified_type *ret,
-				      Dwarf_Die *die_ret)
+				      Dwarf_Die *die_ret, struct drgn_module **module_ret)
 {
 	struct find_symbol_by_name_arg arg = {
 		.name = name,
@@ -1983,6 +1983,8 @@ drgn_program_find_type_by_symbol_name(struct drgn_program *prog,
 				void **userdatap;
 				dwfl_module_info(arg.dwfl_module, &userdatap, NULL, NULL, NULL, NULL, NULL, NULL);
 				struct drgn_module *module = *userdatap;
+				if (module_ret)
+					*module_ret = module;
 				Dwarf_Die die_found;
 				if (drgn_traverse_die_for_pc(die, prog_addr, &die_found)) {
 					struct drgn_error* err = drgn_type_from_dwarf(prog->dbinfo, module, &die_found, ret);
