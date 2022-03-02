@@ -3152,12 +3152,12 @@ skip:
 
 next:
 		if (insn & INSN_DIE_FLAG_CHILDREN) {
-			if (name && tag == DW_TAG_class_type) {
-			  // Add a fake namespace representing the innards of a class.
-			  if (!index_die(ns, cu, name,
-			      DW_TAG_namespace, 0, cu->module, die_addr))
-				return &drgn_enomem;
-			}
+			/* if (name && tag == DW_TAG_class_type) { */
+			/*   // Add a fake namespace representing the innards of a class. */
+			/*   if (!index_die(ns, cu, name, */
+			/*       DW_TAG_namespace, 0, cu->module, die_addr)) */
+			/* 	return &drgn_enomem; */
+			/* } */
 			/*
 			 * We must descend into the children of enumeration_type
 			 * DIEs to index enumerator DIEs. We don't want to skip
@@ -3462,7 +3462,9 @@ struct drgn_dwarf_index_iterator {
 	const uint64_t *tags;
 	size_t num_tags;
 	struct drgn_dwarf_index_shard *shard;
+	size_t shards_remaining;
 	uint32_t index;
+	bool match_all;
 };
 
 /**
@@ -3485,7 +3487,12 @@ drgn_dwarf_index_iterator_init(struct drgn_dwarf_index_iterator *it,
 	struct drgn_error *err = index_namespace(ns);
 	if (err)
 		return err;
-	if (ns->shards) {
+	if (!ns->shards) {
+		it->shard = NULL;
+		it->index = UINT32_MAX;
+		it->shards_remaining = 0;
+		it->match_all = false;
+	} else if (name) {
 		struct nstring key = { name, name_len };
 		struct hash_pair hp = drgn_dwarf_index_die_map_hash(&key);
 		it->shard = &ns->shards[hash_pair_to_shard(hp)];
@@ -3493,9 +3500,13 @@ drgn_dwarf_index_iterator_init(struct drgn_dwarf_index_iterator *it,
 			drgn_dwarf_index_die_map_search_hashed(&it->shard->map,
 							       &key, hp);
 		it->index = map_it.entry ? map_it.entry->value : UINT32_MAX;
+		it->shards_remaining = 1;
+		it->match_all = false;
 	} else {
-		it->shard = NULL;
-		it->index = UINT32_MAX;
+		it->shard = &ns->shards[0];
+		it->index = 0;
+		it->shards_remaining = DRGN_DWARF_INDEX_NUM_SHARDS;
+		it->match_all = true;
 	}
 	it->tags = tags;
 	it->num_tags = num_tags;
@@ -3530,12 +3541,18 @@ drgn_dwarf_index_iterator_matches_tag(struct drgn_dwarf_index_iterator *it,
 static struct drgn_dwarf_index_die *
 drgn_dwarf_index_iterator_next(struct drgn_dwarf_index_iterator *it)
 {
-	while (it->index != UINT32_MAX) {
-		struct drgn_dwarf_index_die *die =
-			&it->shard->dies.data[it->index];
-		it->index = die->next;
-		if (drgn_dwarf_index_iterator_matches_tag(it, die))
-			return die;
+	while (it->shards_remaining > 0) {
+		size_t num_dies = it->shard->dies.size;
+		while (it->index < num_dies) {
+			struct drgn_dwarf_index_die *die =
+				&it->shard->dies.data[it->index];
+			it->index = it->match_all ? it->index + 1 : die->next;
+			if (drgn_dwarf_index_iterator_matches_tag(it, die))
+				return die;
+		}
+		it->index = 0;
+		it->shards_remaining--;
+		it->shard++;
 	}
 	return NULL;
 }
@@ -8847,4 +8864,145 @@ drgn_object_locate(const struct drgn_object_locator *locator,
 		&(struct drgn_module){.platform = x86_64_platform},
 		locator, NULL, locator->qualified_type, location->expr,
 		location->expr_size, NULL, drgn_regs, ret);
+}
+
+static const uint64_t type_tags[] = {
+	DW_TAG_array_type,
+	DW_TAG_class_type,
+	DW_TAG_enumeration_type,
+	DW_TAG_pointer_type,
+	DW_TAG_reference_type,
+	DW_TAG_string_type,
+	DW_TAG_structure_type,
+	DW_TAG_union_type,
+	DW_TAG_ptr_to_member_type,
+	DW_TAG_set_type,
+	DW_TAG_subrange_type,
+	DW_TAG_base_type,
+	DW_TAG_const_type,
+	DW_TAG_file_type,
+	DW_TAG_packed_type,
+	DW_TAG_thrown_type,
+	DW_TAG_volatile_type,
+	DW_TAG_restrict_type,
+	DW_TAG_interface_type,
+	DW_TAG_unspecified_type,
+	DW_TAG_shared_type,
+	DW_TAG_rvalue_reference_type,
+	DW_TAG_coarray_type,
+	DW_TAG_dynamic_type,
+	DW_TAG_atomic_type,
+	DW_TAG_immutable_type,
+};
+
+#define TYPE_TAGS_LENGTH (sizeof(type_tags) / sizeof(*type_tags))
+
+DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index*)
+
+struct drgn_type_iterator {
+	struct drgn_debug_info *dbinfo;
+	struct drgn_dwarf_index_iterator it;
+	struct namespace_vector namespaces;
+	struct drgn_qualified_type curr;
+};
+
+LIBDRGN_PUBLIC
+struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
+					     struct drgn_type_iterator **ret)
+{
+	struct drgn_type_iterator *iter = malloc(sizeof(*iter));
+	if (!iter)
+		return &drgn_enomem;
+	struct drgn_error *err;
+	err = drgn_dwarf_index_iterator_init(&iter->it,
+					     &prog->dbinfo->dwarf.global, NULL,
+					     0, type_tags, TYPE_TAGS_LENGTH);
+	if (err) {
+		free(iter);
+		return err;
+	}
+	iter->dbinfo = prog->dbinfo;
+	namespace_vector_init(&iter->namespaces);
+	struct drgn_namespace_dwarf_index **namespace;
+	namespace = namespace_vector_append_entry(&iter->namespaces);
+	if (!namespace) {
+		namespace_vector_deinit(&iter->namespaces);
+		free(iter);
+		return &drgn_enomem;
+	}
+	*namespace = &prog->dbinfo->dwarf.global;
+	*ret = iter;
+	return NULL;
+}
+
+LIBDRGN_PUBLIC
+void drgn_type_iterator_destroy(struct drgn_type_iterator *iter)
+{
+	if (iter) {
+		namespace_vector_deinit(&iter->namespaces);
+		free(iter);
+	}
+}
+
+LIBDRGN_PUBLIC
+struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
+					   struct drgn_qualified_type **ret)
+{
+	struct namespace_vector *namespaces = &iter->namespaces;
+	struct drgn_dwarf_index_die *index_die;
+	struct drgn_error *err;
+	while (!(index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
+		if (namespaces->size == 0) {
+			// Iterator has been exhausted
+			*ret = NULL;
+			return NULL;
+		}
+
+		// Swap-remove the namespace we just finished processing
+		struct drgn_namespace_dwarf_index *prev_namespace =
+			namespaces->data[0];
+		namespaces->data[0] = namespaces->data[namespaces->size - 1];
+		namespace_vector_pop(namespaces);
+
+		// If we've reached this point, we have gone through all of the types
+		// within `prev_namespace`, so we find all of the namespaces within it
+		// here so that we can recursively process them.
+		err = drgn_dwarf_index_iterator_init(
+			&iter->it, prev_namespace, NULL, 0,
+			&(uint64_t){DW_TAG_namespace}, 1);
+		if (err)
+			return err;
+		while ((index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
+			struct drgn_namespace_dwarf_index **next_namespace =
+				namespace_vector_append_entry(namespaces);
+			if (!next_namespace)
+				return &drgn_enomem;
+			*next_namespace = index_die->namespace;
+		}
+		if (namespaces->size == 0) {
+			// `prev_namespace` contained no other namespaces within it,
+			// ending the recursion.
+			namespace_vector_pop(namespaces);
+			*ret = NULL;
+			return NULL;
+		}
+
+		// Begin processing the next namespace
+		err = drgn_dwarf_index_iterator_init(&iter->it,
+						     namespaces->data[0], NULL,
+						     0, type_tags,
+						     TYPE_TAGS_LENGTH);
+		if (err)
+			return err;
+	}
+	Dwarf_Die die;
+	err = drgn_dwarf_index_get_die(index_die, &die);
+	if (err)
+		return err;
+	err = drgn_type_from_dwarf(iter->dbinfo, index_die->module, &die,
+				   &iter->curr);
+	if (err)
+		return err;
+	*ret = &iter->curr;
+	return NULL;
 }

@@ -154,6 +154,12 @@ typedef struct {
 
 typedef struct {
 	PyObject_HEAD
+	Program *prog;
+	struct drgn_type_iterator *iterator;
+} TypeIterator;
+
+typedef struct {
+	PyObject_HEAD
 	PyObject *obj;
 	/*
 	 * If DRGNPY_LAZY_OBJECT_EVALUATED, obj is the evaluated Object.
@@ -208,6 +214,7 @@ extern PyTypeObject Symbol_type;
 extern PyTypeObject Thread_type;
 extern PyTypeObject ThreadIterator_type;
 extern PyTypeObject TypeEnumerator_type;
+extern PyTypeObject TypeIterator_type;
 extern PyTypeObject TypeMember_type;
 extern PyTypeObject TypeParameter_type;
 extern PyTypeObject TypeTemplateParameter_type;
