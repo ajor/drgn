@@ -292,6 +292,7 @@ drgn_object_from_dwarf(struct drgn_debug_info *dbinfo,
 		       Dwarf_Die *die, Dwarf_Die *type_die,
 		       Dwarf_Die *function_die,
 		       const struct drgn_register_state *regs,
+			   bool must_locate,
 		       struct drgn_object *ret);
 
 struct drgn_error *
