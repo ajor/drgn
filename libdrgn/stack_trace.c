@@ -476,7 +476,7 @@ not_found:;
 				      &die,
 				      dwarf_tag(&die) == DW_TAG_enumerator ?
 				      &type_die : NULL,
-				      &function_die, frame->regs, ret);
+				      &function_die, frame->regs, true, ret);
 }
 
 LIBDRGN_PUBLIC bool drgn_stack_frame_register(struct drgn_stack_trace *trace,
