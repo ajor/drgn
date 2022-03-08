@@ -5731,6 +5731,7 @@ drgn_object_from_dwarf(struct drgn_debug_info *dbinfo,
 		       struct drgn_module *module, Dwarf_Die *die,
 		       Dwarf_Die *type_die, Dwarf_Die *function_die,
 		       const struct drgn_register_state *regs,
+			   bool must_locate,
 		       struct drgn_object *ret)
 {
 	struct drgn_error *err;
@@ -5764,7 +5765,7 @@ drgn_object_from_dwarf(struct drgn_debug_info *dbinfo,
 	size_t expr_size;
 	struct drgn_object_locator locator;
 	err = drgn_object_locator_init(drgn_object_program(ret), module, function_die, die, &locator);
-	if (err)
+	if (must_locate && err)
 		return err;
 	if (regs) {
 		struct optional_uint64 pc = drgn_register_state_get_pc(regs);
@@ -6525,7 +6526,7 @@ drgn_dwarf_template_value_parameter_thunk_fn(struct drgn_object *res,
 	if (res) {
 		err = drgn_object_from_dwarf(drgn_object_program(res)->dbinfo,
 					     arg->module, &arg->die, NULL, NULL,
-					     NULL, res);
+					     NULL, false, res);
 		if (err)
 			return err;
 	}
@@ -7591,7 +7592,7 @@ drgn_debug_info_find_object(const char *name, size_t name_len,
 								 ret);
 		} else {
 			return drgn_object_from_dwarf(dbinfo, index_die->module,
-						      &die, NULL, NULL, NULL,
+						      &die, NULL, NULL, NULL, false,
 						      ret);
 		}
 	}
