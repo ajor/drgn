@@ -2761,12 +2761,15 @@ err:
 	return success;
 }
 
+static const char *const enable_type_iterator_env_var = "DRGN_ENABLE_TYPE_ITERATOR";
+
 /* Second pass: index the actual DIEs. */
 static struct drgn_error *
 index_cu_second_pass(struct drgn_namespace_dwarf_index *ns,
 		     struct drgn_dwarf_index_cu_buffer *buffer,
 		     struct drgn_inlined_map *inlined_map)
 {
+	const bool enable_type_iterator = getenv(enable_type_iterator_env_var) != NULL;
 	struct drgn_error *err;
 	struct drgn_dwarf_index_cu *cu = buffer->cu;
 	const char *debug_info_buffer = cu->module->scn_data[cu->scn]->d_buf;
@@ -3152,12 +3155,12 @@ skip:
 
 next:
 		if (insn & INSN_DIE_FLAG_CHILDREN) {
-			/* if (name && tag == DW_TAG_class_type) { */
-			/*   // Add a fake namespace representing the innards of a class. */
-			/*   if (!index_die(ns, cu, name, */
-			/*       DW_TAG_namespace, 0, cu->module, die_addr)) */
-			/* 	return &drgn_enomem; */
-			/* } */
+			if (!enable_type_iterator && name && tag == DW_TAG_class_type) {
+			  // Add a fake namespace representing the innards of a class.
+			  if (!index_die(ns, cu, name,
+			      DW_TAG_namespace, 0, cu->module, die_addr))
+				return &drgn_enomem;
+			}
 			/*
 			 * We must descend into the children of enumeration_type
 			 * DIEs to index enumerator DIEs. We don't want to skip
@@ -8910,6 +8913,11 @@ LIBDRGN_PUBLIC
 struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 					     struct drgn_type_iterator **ret)
 {
+	if (!getenv(enable_type_iterator_env_var))
+		return drgn_error_format(
+			DRGN_ERROR_INVALID_ARGUMENT,
+			"the environment variable '%s' must be set in order to create a type iterator",
+			enable_type_iterator_env_var);
 	struct drgn_type_iterator *iter = malloc(sizeof(*iter));
 	if (!iter)
 		return &drgn_enomem;
