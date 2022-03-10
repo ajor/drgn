@@ -7415,6 +7415,8 @@ drgn_type_from_dwarf_internal(struct drgn_debug_info *dbinfo,
 	dbinfo->dwarf.depth--;
 	if (err)
 		return err;
+	ret->type->_private.die_addr = (uintptr_t) die->addr;
+	ret->type->_private.module = module;
 
 	entry.value.type = ret->type;
 	entry.value.qualifiers = ret->qualifiers;
@@ -9013,4 +9015,88 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		return err;
 	*ret = &iter->curr;
 	return NULL;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_type_fully_qualified_name(struct drgn_type *type, char **str_ret)
+{
+	struct drgn_error *err;
+	Dwarf_Addr bias;
+	Dwarf_Die die;
+	Dwarf *dwarf = dwfl_module_getdwarf(type->_private.module->dwfl_module,
+					    &bias);
+	if (!dwarf)
+		return drgn_error_libdwfl();
+	Dwarf_Addr prog_addr = type->_private.die_addr;
+
+	// TODO fix this Super ultra hack - we shouldn't be hijacking this function in this way
+	struct drgn_dwarf_index_die hack_index;
+	hack_index.addr = prog_addr;
+	hack_index.module = type->_private.module;
+	if ((err = drgn_dwarf_index_get_die(&hack_index, &die)));
+
+	Dwarf_Die *die_arr;
+	size_t die_arr_len;
+	if ((err = drgn_find_die_ancestors(&die, &die_arr, &die_arr_len)))
+		return err;
+
+	struct str_vector parents;
+	str_vector_init(&parents);
+	// Null terminator
+	size_t name_bytes = 1;
+
+	for (size_t i = 0; i <= die_arr_len; i++) {
+		Dwarf_Die *current;
+		if (i == die_arr_len)
+			current = &die;
+		else
+			current = &die_arr[i];
+		if (dwarf_tag(current) == DW_TAG_namespace ||
+		    dwarf_tag(current) == DW_TAG_class_type ||
+		    i == die_arr_len) {
+			const char* name;
+			Dwarf_Die type_unit_die;
+			Dwarf_Attribute attr_mem;
+			Dwarf_Attribute *attr;
+			// Handle type units on class dies
+			if ((attr = dwarf_attr_integrate(current, DW_AT_signature, &attr_mem))) {
+				if (!dwarf_formref_die(attr, &type_unit_die)) {
+					err = drgn_error_format(DRGN_ERROR_OTHER,
+								"tag 0x%x has invalid DW_AT_signature",
+								dwarf_tag(current));
+					goto err;
+				}
+				name = dwarf_diename(&type_unit_die);
+			} else {
+				name = dwarf_diename(current);
+			}
+			if (!str_vector_append(&parents, &name)) {
+				err = &drgn_enomem;
+				goto err;
+			}
+			// Add 2 for ::
+			name_bytes += strlen(name) + 2;
+		}
+	}
+
+	char *name = malloc(name_bytes);
+	if (!name) {
+		err = &drgn_enomem;
+		goto err;
+	}
+
+	char *target = name;
+	for (size_t i = 0; i < parents.size; i++) {
+		memcpy(target, "::", 2);
+		target += 2;
+		size_t len = strlen(parents.data[i]);
+		memcpy(target, parents.data[i], len);
+		target += len;
+	}
+	*target = '\0';
+	*str_ret = name;
+err:
+	str_vector_deinit(&parents);
+	free(die_arr);
+	return err;
 }
