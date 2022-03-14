@@ -156,6 +156,7 @@ typedef struct {
 	PyObject_HEAD
 	Program *prog;
 	struct drgn_type_iterator *iterator;
+	bool is_oil_iterator;
 } TypeIterator;
 
 typedef struct {
