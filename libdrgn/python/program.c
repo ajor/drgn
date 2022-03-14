@@ -924,6 +924,27 @@ static PyObject *Program_types(Program *self)
 	Py_INCREF(self);
 	ret->prog = self;
 	ret->iterator = iterator;
+	ret->is_oil_iterator = false;
+	return (PyObject *)ret;
+}
+
+static PyObject *Program_oil_types(Program *self)
+{
+	struct drgn_type_iterator *iterator;
+	struct drgn_error *err;
+	err = drgn_oil_type_iterator_create(&self->prog, &iterator);
+	if (err)
+		return set_drgn_error(err);
+	TypeIterator *ret = (TypeIterator *)TypeIterator_type.tp_alloc(
+		&TypeIterator_type, 0);
+	if (!ret) {
+		drgn_type_iterator_destroy(iterator);
+		return NULL;
+	}
+	Py_INCREF(self);
+	ret->prog = self;
+	ret->iterator = iterator;
+	ret->is_oil_iterator = true;
 	return (PyObject *)ret;
 }
 
@@ -1117,6 +1138,8 @@ static PyMethodDef Program_methods[] = {
 	{"thread", (PyCFunction)Program_thread,
 	 METH_VARARGS | METH_KEYWORDS, drgn_Program_thread_DOC},
 	{"types", (PyCFunction)Program_types,
+	 METH_NOARGS, ""},
+	{"oil_types", (PyCFunction)Program_oil_types,
 	 METH_NOARGS, ""},
 	{"main_thread", (PyCFunction)Program_main_thread, METH_NOARGS,
 	 drgn_Program_main_thread_DOC},

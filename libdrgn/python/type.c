@@ -2358,7 +2358,7 @@ static void TypeIterator_dealloc(TypeIterator *self) {
 
 static PyObject *TypeIterator_next(TypeIterator *self) {
 	struct drgn_qualified_type *type;
-	struct drgn_error *err = drgn_type_iterator_next(self->iterator, &type);
+	struct drgn_error *err = self->is_oil_iterator ? drgn_oil_type_iterator_next(self->iterator, &type) : drgn_type_iterator_next(self->iterator, &type);
 	if (err)
 		return set_drgn_error(err);
 	return type ? DrgnType_wrap(*type) : NULL;
