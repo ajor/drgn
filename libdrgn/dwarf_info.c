@@ -9127,3 +9127,75 @@ err:
 	free(ancestors);
 	return err;
 }
+
+#define OBJECT_INTROSPECTION_NAMESPACE "ObjectIntrospection"
+#define OBJECT_INTROSPECTION_NAMESPACE_LENGTH (sizeof(OBJECT_INTROSPECTION_NAMESPACE) - 1)
+
+LIBDRGN_PUBLIC
+struct drgn_error *drgn_oil_type_iterator_create(struct drgn_program *prog,
+					     struct drgn_type_iterator **ret) {
+	if (!getenv(enable_type_iterator_env_var))
+		return drgn_error_format(
+			DRGN_ERROR_INVALID_ARGUMENT,
+			"the environment variable '%s' must be set in order to create a type iterator",
+			enable_type_iterator_env_var);
+	struct drgn_type_iterator *iter = calloc(1, sizeof(*iter));
+	if (!iter)
+		return &drgn_enomem;
+	iter->dbinfo = prog->dbinfo;
+	struct drgn_error *err;
+	err = drgn_dwarf_index_iterator_init(&iter->it,
+					     &prog->dbinfo->dwarf.global, OBJECT_INTROSPECTION_NAMESPACE,
+					     OBJECT_INTROSPECTION_NAMESPACE_LENGTH, (uint64_t[]){DW_TAG_namespace}, 1);
+	if (err)
+		return err;
+	struct drgn_dwarf_index_die *namespace = drgn_dwarf_index_iterator_next(&iter->it);
+	if (!namespace)
+		return drgn_error_format(DRGN_ERROR_OTHER, "no namespace found with name '%s'", OBJECT_INTROSPECTION_NAMESPACE);
+	static uint64_t function_tags[] = {DW_TAG_subprogram, DW_TAG_inlined_subroutine};
+	err = drgn_dwarf_index_iterator_init(&iter->it,
+					     namespace->namespace, NULL,
+					     0, function_tags, 2);
+	if (err)
+		return err;
+	*ret = iter;
+	return NULL;
+}
+
+#define OBJECT_INTROSPECTION_FUNC_PREFIX "getObjectSize<"
+#define OBJECT_INTROSPECTION_FUNC_PREFIX_LENGTH (sizeof(OBJECT_INTROSPECTION_FUNC_PREFIX) - 1)
+
+static bool find_template_parameter(Dwarf_Die *die, Dwarf_Die *ret) {
+	if (dwarf_tag(die) == DW_TAG_template_type_parameter) {
+		*ret = *die;
+		return true;
+	}
+	return (dwarf_child(die, ret) == 0 && find_template_parameter(ret, ret)) || (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
+}
+
+LIBDRGN_PUBLIC
+struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, struct drgn_qualified_type **ret) {
+	struct drgn_dwarf_index_die *index_die;
+	struct drgn_error *err;
+	while ((index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
+		Dwarf_Die die;
+		err = drgn_dwarf_index_get_die(index_die, &die);
+		if (err)
+			return err;
+		Dwarf_Attribute name_attr;
+		if (dwarf_attr_integrate(&die, DW_AT_name, &name_attr)) {
+			const char* name = dwarf_formstring(&name_attr);
+			if (name && strncmp(name, OBJECT_INTROSPECTION_FUNC_PREFIX, OBJECT_INTROSPECTION_FUNC_PREFIX_LENGTH) == 0) {
+				Dwarf_Die child, template_parameter;
+				if (dwarf_child(&die, &child) != 0 || !find_template_parameter(&child, &template_parameter))
+					return drgn_error_format(DRGN_ERROR_LOOKUP, "could not find template parameter for DWARF DIE with address 0x%lx", (uintptr_t) die.addr);
+				err = drgn_type_from_dwarf_attr(iter->dbinfo, index_die->module, &template_parameter, &drgn_language_cpp, false, false, NULL, &iter->curr);
+				if (!err)
+					*ret = &iter->curr;
+				return err;
+			}
+		}
+	}
+	*ret = NULL;
+	return NULL;
+}
