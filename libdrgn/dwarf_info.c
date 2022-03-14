@@ -9132,8 +9132,10 @@ err:
 #define OBJECT_INTROSPECTION_NAMESPACE_LENGTH (sizeof(OBJECT_INTROSPECTION_NAMESPACE) - 1)
 
 LIBDRGN_PUBLIC
-struct drgn_error *drgn_oil_type_iterator_create(struct drgn_program *prog,
-					     struct drgn_type_iterator **ret) {
+struct drgn_error *
+drgn_oil_type_iterator_create(struct drgn_program *prog,
+			      struct drgn_type_iterator **ret)
+{
 	if (!getenv(enable_type_iterator_env_var))
 		return drgn_error_format(
 			DRGN_ERROR_INVALID_ARGUMENT,
@@ -9144,18 +9146,23 @@ struct drgn_error *drgn_oil_type_iterator_create(struct drgn_program *prog,
 		return &drgn_enomem;
 	iter->dbinfo = prog->dbinfo;
 	struct drgn_error *err;
-	err = drgn_dwarf_index_iterator_init(&iter->it,
-					     &prog->dbinfo->dwarf.global, OBJECT_INTROSPECTION_NAMESPACE,
-					     OBJECT_INTROSPECTION_NAMESPACE_LENGTH, (uint64_t[]){DW_TAG_namespace}, 1);
+	err = drgn_dwarf_index_iterator_init(
+		&iter->it, &prog->dbinfo->dwarf.global,
+		OBJECT_INTROSPECTION_NAMESPACE,
+		OBJECT_INTROSPECTION_NAMESPACE_LENGTH,
+		(uint64_t[]){DW_TAG_namespace}, 1);
 	if (err)
 		return err;
-	struct drgn_dwarf_index_die *namespace = drgn_dwarf_index_iterator_next(&iter->it);
+	struct drgn_dwarf_index_die *namespace =
+		drgn_dwarf_index_iterator_next(&iter->it);
 	if (!namespace)
-		return drgn_error_format(DRGN_ERROR_OTHER, "no namespace found with name '%s'", OBJECT_INTROSPECTION_NAMESPACE);
-	static uint64_t function_tags[] = {DW_TAG_subprogram, DW_TAG_inlined_subroutine};
-	err = drgn_dwarf_index_iterator_init(&iter->it,
-					     namespace->namespace, NULL,
-					     0, function_tags, 2);
+		return drgn_error_format(DRGN_ERROR_OTHER,
+					 "no namespace found with name '%s'",
+					 OBJECT_INTROSPECTION_NAMESPACE);
+	static uint64_t function_tags[] = {DW_TAG_subprogram,
+					   DW_TAG_inlined_subroutine};
+	err = drgn_dwarf_index_iterator_init(&iter->it, namespace->namespace,
+					     NULL, 0, function_tags, 2);
 	if (err)
 		return err;
 	*ret = iter;
@@ -9170,7 +9177,8 @@ static bool find_template_parameter(Dwarf_Die *die, Dwarf_Die *ret) {
 		*ret = *die;
 		return true;
 	}
-	return (dwarf_child(die, ret) == 0 && find_template_parameter(ret, ret)) || (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
+	return (dwarf_child(die, ret) == 0 && find_template_parameter(ret, ret)) ||
+	       (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
 }
 
 LIBDRGN_PUBLIC
