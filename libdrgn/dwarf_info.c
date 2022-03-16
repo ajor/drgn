@@ -9017,6 +9017,52 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 	return NULL;
 }
 
+static struct drgn_error *drgn_dwarf_peel(Dwarf_Die *die, Dwarf_Die *ret)
+{
+	*ret = *die;
+	// Set an aribtrary maximum depth to prevent entering an infinite
+	// loop due to malformed debug information.
+	for (int depth = 0; depth < 64; depth++) {
+		switch (dwarf_tag(ret)) {
+		case DW_TAG_typedef:
+		case DW_TAG_const_type:
+		case DW_TAG_volatile_type:
+		case DW_TAG_restrict_type:
+		case DW_TAG_atomic_type:
+		case DW_TAG_immutable_type:
+		case DW_TAG_packed_type:
+		case DW_TAG_shared_type: {
+			int result = dwarf_peel_type(ret, ret);
+			if (result == -1)
+				return drgn_error_libdw();
+			if (result == 1)
+				return NULL; // Nothing left to peel
+			// if result == 0, we proceed with peeling
+		}
+		break;
+		case DW_TAG_pointer_type:
+		case DW_TAG_reference_type:
+		case DW_TAG_rvalue_reference_type: {
+			Dwarf_Attribute attr;
+			if (!dwarf_attr_integrate(ret, DW_AT_type, &attr))
+				return drgn_error_format(
+					DRGN_ERROR_INVALID_ARGUMENT,
+					"DWARF DIE with address 0x%lx was missing DW_AT_type attribute",
+					(uintptr_t)ret->addr);
+			if (!dwarf_formref_die(&attr, ret))
+				return drgn_error_libdw();
+		}
+		break;
+		default:
+			// Nothing left to peel
+			return NULL;
+		}
+	}
+	return drgn_error_create(
+		DRGN_ERROR_OTHER,
+		"Maximum depth exceeded while peeling DWARF DIE type");
+}
+
 LIBDRGN_PUBLIC struct drgn_error *
 drgn_type_fully_qualified_name(struct drgn_type *type, char **ret)
 {
@@ -9043,6 +9089,7 @@ drgn_type_fully_qualified_name(struct drgn_type *type, char **ret)
 			continue;
 		const char *name;
 		Dwarf_Attribute attr;
+		Dwarf_Die peeled_type;
 		// Handle type units on class dies
 		if (dwarf_attr_integrate(current, DW_AT_signature, &attr)) {
 			Dwarf_Die type_unit_die;
@@ -9053,10 +9100,13 @@ drgn_type_fully_qualified_name(struct drgn_type *type, char **ret)
 					(uintptr_t)current->addr, tag);
 				goto err;
 			}
-			name = dwarf_diename(&type_unit_die);
+			if ((err = drgn_dwarf_peel(&type_unit_die, &peeled_type)))
+				goto err;
 		} else {
-			name = dwarf_diename(current);
+			if ((err = drgn_dwarf_peel(current, &peeled_type)))
+				goto err;
 		}
+		name = dwarf_diename(&peeled_type);
 		if (!string_builder_appendf(&fully_qualified_name, "::%s",
 					    name)) {
 			err = &drgn_enomem;
