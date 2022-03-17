@@ -9081,6 +9081,13 @@ drgn_type_fully_qualified_name(struct drgn_type *type, char **ret)
 		return err;
 
 	struct string_builder fully_qualified_name = {};
+	// We know we're going to at least have the leading "::", the type name,
+	// and the null terminator, so we reserve a modest amount of space in order
+	// to avoid the first few reallocations where the capacity is _very_ small.
+	if (!string_builder_reserve(&fully_qualified_name, 16)) {
+		err = &drgn_enomem;
+		goto err;
+	}
 	for (size_t i = 0; i <= num_ancestors; i++) {
 		Dwarf_Die *current = i == num_ancestors ? &die : &ancestors[i];
 		int tag = dwarf_tag(current);
@@ -9090,20 +9097,19 @@ drgn_type_fully_qualified_name(struct drgn_type *type, char **ret)
 		const char *name;
 		Dwarf_Attribute attr;
 		Dwarf_Die peeled_type;
+		if ((err = drgn_dwarf_peel(current, &peeled_type)))
+			goto err;
 		// Handle type units on class dies
-		if (dwarf_attr_integrate(current, DW_AT_signature, &attr)) {
+		if (dwarf_attr_integrate(&peeled_type, DW_AT_signature, &attr)) {
 			Dwarf_Die type_unit_die;
 			if (!dwarf_formref_die(&attr, &type_unit_die)) {
 				err = drgn_error_format(
 					DRGN_ERROR_OTHER,
 					"DWARF DIE at address %lx with tag 0x%x has invalid DW_AT_signature",
-					(uintptr_t)current->addr, tag);
+					(uintptr_t)peeled_type.addr, tag);
 				goto err;
 			}
 			if ((err = drgn_dwarf_peel(&type_unit_die, &peeled_type)))
-				goto err;
-		} else {
-			if ((err = drgn_dwarf_peel(current, &peeled_type)))
 				goto err;
 		}
 		name = dwarf_diename(&peeled_type);
@@ -9116,6 +9122,8 @@ drgn_type_fully_qualified_name(struct drgn_type *type, char **ret)
 	if (!string_builder_finalize(&fully_qualified_name, ret))
 		err = &drgn_enomem;
 err:
+	if (err)
+		free(fully_qualified_name.str);
 	free(ancestors);
 	return err;
 }
