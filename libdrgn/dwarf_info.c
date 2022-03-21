@@ -8905,7 +8905,7 @@ static const uint64_t type_tags[] = {
 DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index*)
 
 struct drgn_type_iterator {
-	struct drgn_debug_info *dbinfo;
+	struct drgn_program *prog;
 	struct drgn_dwarf_index_iterator it;
 	struct namespace_vector namespaces;
 	struct drgn_qualified_type curr;
@@ -8931,7 +8931,7 @@ struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 		free(iter);
 		return err;
 	}
-	iter->dbinfo = prog->dbinfo;
+	iter->prog = prog;
 	namespace_vector_init(&iter->namespaces);
 	struct drgn_namespace_dwarf_index **namespace;
 	namespace = namespace_vector_append_entry(&iter->namespaces);
@@ -9009,7 +9009,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 	err = drgn_dwarf_index_get_die(index_die, &die);
 	if (err)
 		return err;
-	err = drgn_type_from_dwarf(iter->dbinfo, index_die->module, &die,
+	err = drgn_type_from_dwarf(iter->prog->dbinfo, index_die->module, &die,
 				   &iter->curr);
 	if (err)
 		return err;
@@ -9144,7 +9144,7 @@ drgn_oil_type_iterator_create(struct drgn_program *prog,
 	struct drgn_type_iterator *iter = calloc(1, sizeof(*iter));
 	if (!iter)
 		return &drgn_enomem;
-	iter->dbinfo = prog->dbinfo;
+	iter->prog = prog;
 	struct drgn_error *err;
 	err = drgn_dwarf_index_iterator_init(
 		&iter->it, &prog->dbinfo->dwarf.global,
@@ -9159,18 +9159,17 @@ drgn_oil_type_iterator_create(struct drgn_program *prog,
 		return drgn_error_format(DRGN_ERROR_OTHER,
 					 "no namespace found with name '%s'",
 					 OBJECT_INTROSPECTION_NAMESPACE);
-	static uint64_t function_tags[] = {DW_TAG_subprogram,
-					   DW_TAG_inlined_subroutine};
+	static uint64_t class_tag = DW_TAG_class_type;
 	err = drgn_dwarf_index_iterator_init(&iter->it, namespace->namespace,
-					     NULL, 0, function_tags, 2);
+					     NULL, 0, &class_tag, 1);
 	if (err)
 		return err;
 	*ret = iter;
 	return NULL;
 }
 
-#define OBJECT_INTROSPECTION_FUNC_PREFIX "getObjectSize<"
-#define OBJECT_INTROSPECTION_FUNC_PREFIX_LENGTH (sizeof(OBJECT_INTROSPECTION_FUNC_PREFIX) - 1)
+#define CODEGEN_HANDLER_PREFIX "CodegenHandler<"
+#define CODEGEN_HANDLER_PREFIX_LENGTH (sizeof(CODEGEN_HANDLER_PREFIX) - 1)
 
 static bool find_template_parameter(Dwarf_Die *die, Dwarf_Die *ret) {
 	if (dwarf_tag(die) == DW_TAG_template_type_parameter) {
@@ -9181,29 +9180,70 @@ static bool find_template_parameter(Dwarf_Die *die, Dwarf_Die *ret) {
 	       (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
 }
 
+static bool find_get_object_size(Dwarf_Die *die, Dwarf_Die *ret) {
+	if (dwarf_tag(die) == DW_TAG_subprogram) {
+		const char* name = dwarf_diename(die);
+		if (name && strcmp(name, "getObjectSize") == 0) {
+			*ret = *die;
+			return true;
+		}
+	}
+	return (dwarf_child(die, ret) == 0 && find_template_parameter(ret, ret)) ||
+	       (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
+}
+
 LIBDRGN_PUBLIC
-struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, struct drgn_qualified_type **ret) {
+struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, struct drgn_qualified_type **type_ret, uintptr_t *function_addr_ret) {
 	struct drgn_dwarf_index_die *index_die;
 	struct drgn_error *err;
 	while ((index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
-		Dwarf_Die die;
-		err = drgn_dwarf_index_get_die(index_die, &die);
+		Dwarf_Die class_die;
+		err = drgn_dwarf_index_get_die(index_die, &class_die);
 		if (err)
 			return err;
 		Dwarf_Attribute name_attr;
-		if (dwarf_attr_integrate(&die, DW_AT_name, &name_attr)) {
+		if (dwarf_attr_integrate(&class_die, DW_AT_name, &name_attr)) {
 			const char* name = dwarf_formstring(&name_attr);
-			if (name && strncmp(name, OBJECT_INTROSPECTION_FUNC_PREFIX, OBJECT_INTROSPECTION_FUNC_PREFIX_LENGTH) == 0) {
-				Dwarf_Die child, template_parameter;
-				if (dwarf_child(&die, &child) != 0 || !find_template_parameter(&child, &template_parameter))
-					return drgn_error_format(DRGN_ERROR_LOOKUP, "could not find template parameter for DWARF DIE with address 0x%lx", (uintptr_t) die.addr);
-				err = drgn_type_from_dwarf_attr(iter->dbinfo, index_die->module, &template_parameter, &drgn_language_cpp, false, false, NULL, &iter->curr);
-				if (!err)
-					*ret = &iter->curr;
-				return err;
+			if (name && strncmp(name, CODEGEN_HANDLER_PREFIX, CODEGEN_HANDLER_PREFIX_LENGTH) == 0) {
+				Dwarf_Die child, template_parameter, get_object_size_func;
+				if (dwarf_child(&class_die, &child) != 0)
+					return drgn_error_format(DRGN_ERROR_LOOKUP, "DWARF DIE with address 0x%lx has no children", (uintptr_t) class_die.addr);
+				bool template_parameter_found = false, get_object_size_func_found = false, has_sibling = true;
+				while (has_sibling && !(template_parameter_found && get_object_size_func_found)) {
+					if (dwarf_tag(&child) == DW_TAG_template_type_parameter) {
+						template_parameter = child;
+						template_parameter_found = true;
+					} else if (dwarf_tag(&child) == DW_TAG_subprogram) {
+						const char* child_name = dwarf_diename(&child);
+						if (child_name && strcmp(child_name, "getObjectSize") == 0) {
+							get_object_size_func = child;
+							get_object_size_func_found = true;
+						}
+					}
+					has_sibling = dwarf_siblingof(&child, &child) == 0;
+				}
+				if (!template_parameter_found)
+					return drgn_error_create(DRGN_ERROR_LOOKUP, "could not find template parameter within CodegenHandler");
+				if (!get_object_size_func_found)
+					return drgn_error_create(DRGN_ERROR_LOOKUP, "could not find getObjectSize within CodegenHandler");
+				err = drgn_type_from_dwarf_attr(iter->prog->dbinfo, index_die->module, &template_parameter, &drgn_language_cpp, false, false, NULL, &iter->curr);
+				if (err)
+					return err;
+				Dwarf_Attribute linkage_name_attr;
+				if (!dwarf_attr_integrate(&get_object_size_func, DW_AT_linkage_name, &linkage_name_attr))
+					return drgn_error_create(DRGN_ERROR_LOOKUP, "getObjectSize function had no attribute DW_AT_linkage_name");
+				struct drgn_symbol *symbol;
+				err = drgn_program_find_symbol_by_name(iter->prog, dwarf_formstring(&linkage_name_attr), &symbol);
+				if (err)
+					return err;
+				*type_ret = &iter->curr;
+				*function_addr_ret = drgn_symbol_address(symbol);
+				drgn_symbol_destroy(symbol);
+				return NULL;
 			}
 		}
 	}
-	*ret = NULL;
+	*type_ret = NULL;
+	*function_addr_ret = 0;
 	return NULL;
 }
