@@ -9205,7 +9205,7 @@ struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, 
 		if (dwarf_attr_integrate(&class_die, DW_AT_name, &name_attr)) {
 			const char* name = dwarf_formstring(&name_attr);
 			if (name && strncmp(name, CODEGEN_HANDLER_PREFIX, CODEGEN_HANDLER_PREFIX_LENGTH) == 0) {
-				Dwarf_Die child, template_parameter, get_object_size_func;
+				Dwarf_Die child, template_parameter;
 				if (dwarf_child(&class_die, &child) != 0)
 					return drgn_error_format(DRGN_ERROR_LOOKUP, "DWARF DIE with address 0x%lx has no children", (uintptr_t) class_die.addr);
 				bool template_parameter_found = false, get_object_size_func_found = false, has_sibling = true;
@@ -9216,8 +9216,22 @@ struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, 
 					} else if (dwarf_tag(&child) == DW_TAG_subprogram) {
 						const char* child_name = dwarf_diename(&child);
 						if (child_name && strcmp(child_name, "getObjectSize") == 0) {
-							get_object_size_func = child;
-							get_object_size_func_found = true;
+							Dwarf_Attribute linkage_name_attr;
+							if (dwarf_attr_integrate(&child, DW_AT_linkage_name, &linkage_name_attr)) {
+								struct drgn_symbol *symbol;
+								// We need to check that the symbol exists here and not at the end of the loop because
+								// getObjectSize is overloaded in CodegenHandler: it's possible that not all of the various
+								// overloads are used, so we need to check that the one we're currently examining *is* used
+								// (by verifying that it exists in the symbol table).
+								err = drgn_program_find_symbol_by_name(iter->prog, dwarf_formstring(&linkage_name_attr), &symbol);
+								if (!err) {
+									*function_addr_ret = drgn_symbol_address(symbol);
+									drgn_symbol_destroy(symbol);
+									get_object_size_func_found = true;
+								} else {
+									drgn_error_destroy(err);
+								}
+							}
 						}
 					}
 					has_sibling = dwarf_siblingof(&child, &child) == 0;
@@ -9229,16 +9243,7 @@ struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, 
 				err = drgn_type_from_dwarf_attr(iter->prog->dbinfo, index_die->module, &template_parameter, &drgn_language_cpp, false, false, NULL, &iter->curr);
 				if (err)
 					return err;
-				Dwarf_Attribute linkage_name_attr;
-				if (!dwarf_attr_integrate(&get_object_size_func, DW_AT_linkage_name, &linkage_name_attr))
-					return drgn_error_create(DRGN_ERROR_LOOKUP, "getObjectSize function had no attribute DW_AT_linkage_name");
-				struct drgn_symbol *symbol;
-				err = drgn_program_find_symbol_by_name(iter->prog, dwarf_formstring(&linkage_name_attr), &symbol);
-				if (err)
-					return err;
 				*type_ret = &iter->curr;
-				*function_addr_ret = drgn_symbol_address(symbol);
-				drgn_symbol_destroy(symbol);
 				return NULL;
 			}
 		}
