@@ -9174,27 +9174,6 @@ drgn_oil_type_iterator_create(struct drgn_program *prog,
 #define CODEGEN_HANDLER_PREFIX "CodegenHandler<"
 #define CODEGEN_HANDLER_PREFIX_LENGTH (sizeof(CODEGEN_HANDLER_PREFIX) - 1)
 
-static bool find_template_parameter(Dwarf_Die *die, Dwarf_Die *ret) {
-	if (dwarf_tag(die) == DW_TAG_template_type_parameter) {
-		*ret = *die;
-		return true;
-	}
-	return (dwarf_child(die, ret) == 0 && find_template_parameter(ret, ret)) ||
-	       (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
-}
-
-static bool find_get_object_size(Dwarf_Die *die, Dwarf_Die *ret) {
-	if (dwarf_tag(die) == DW_TAG_subprogram) {
-		const char* name = dwarf_diename(die);
-		if (name && strcmp(name, "getObjectSize") == 0) {
-			*ret = *die;
-			return true;
-		}
-	}
-	return (dwarf_child(die, ret) == 0 && find_template_parameter(ret, ret)) ||
-	       (dwarf_siblingof(die, ret) == 0 && find_template_parameter(ret, ret));
-}
-
 LIBDRGN_PUBLIC
 struct drgn_error *drgn_oil_type_iterator_next(struct drgn_type_iterator *iter, struct drgn_qualified_type **type_ret, uintptr_t *function_addr_ret) {
 	struct drgn_dwarf_index_die *index_die;
