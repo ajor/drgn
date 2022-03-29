@@ -1071,7 +1071,7 @@ static PyObject *Program_find_by_mangled_name(Program *self, PyObject *args, PyO
 	fprintf(stderr,
 	        "DWARF DIE information:\n"
 	        "  offset: 0x%lx\n"
-	        "  tag: 0x%lx\n"
+	        "  tag: 0x%x\n"
 	        "  addr: 0x%lx\n",
 	        dwarf_dieoffset(&die),
 	        dwarf_tag(&die),
