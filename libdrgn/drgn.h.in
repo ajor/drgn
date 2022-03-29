@@ -2064,7 +2064,7 @@ struct drgn_type {
 		struct drgn_type_template_parameter *parents;
 		size_t num_parents;
 		uintptr_t die_addr;
-		struct drgn_debug_info_module *module;
+		struct drgn_module *module;
 	} _private;
 };
 
