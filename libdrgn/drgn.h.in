@@ -2059,6 +2059,8 @@ struct drgn_type {
 		size_t num_parents;
 		uintptr_t die_addr;
 		struct drgn_debug_info_module *module;
+    size_t oi_size;
+    const char *oi_name;
 	} _private;
 };
 
