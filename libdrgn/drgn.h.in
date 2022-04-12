@@ -2066,6 +2066,8 @@ struct drgn_type {
 		size_t num_parents;
 		uintptr_t die_addr;
 		struct drgn_elf_file *file;
+    size_t oi_size;
+    const char *oi_name;
 	} _private;
 };
 
