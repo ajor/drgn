@@ -1941,3 +1941,10 @@ drgn_program_element_info(struct drgn_program *prog, struct drgn_type *type,
 	ret->qualified_type = drgn_type_type(underlying_type);
 	return drgn_type_bit_size(ret->qualified_type.type, &ret->bit_size);
 }
+
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_program_find_type_by_pure_name(struct drgn_program *prog, const char *name, struct drgn_qualified_type *ret)
+{
+	return drgn_debug_info_find_type_by_pure_name(name, strlen(name), prog->dbinfo, ret);
+}
