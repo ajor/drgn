@@ -863,6 +863,10 @@ struct drgn_error *drgn_program_find_type_by_symbol_name(
     struct drgn_qualified_type *ret, Dwarf_Die *die_ret,
 	struct drgn_module **module_ret);
 
+struct drgn_error *
+drgn_program_find_type_by_pure_name(struct drgn_program *prog, const char *name,
+				    struct drgn_qualified_type *ret);
+
 /**
  * Get all global and local symbols, optionally with the given name.
  *

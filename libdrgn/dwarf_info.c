@@ -7847,6 +7847,65 @@ drgn_debug_info_find_object_in_type_die(struct drgn_dwarf_index_die *index_die,
 }
 
 struct drgn_error *
+drgn_debug_info_find_type_by_pure_name(const char *name, size_t name_len,
+				       void *arg,
+				       struct drgn_qualified_type *ret)
+{
+	struct drgn_error *err;
+	struct drgn_debug_info *dbinfo = arg;
+
+	struct drgn_namespace_dwarf_index *ns = &dbinfo->dwarf.global;
+	if (name_len >= 2 && memcmp(name, "::", 2) == 0) {
+		/* Explicit global namespace. */
+		name_len -= 2;
+		name += 2;
+	}
+	const char *colons;
+	while ((colons = memmem(name, name_len, "::", 2))) {
+		struct drgn_dwarf_index_iterator it;
+		// We are only checking for DW_TAG_namespace here because the hack
+		// presently in place indexes classes and structs as namespaces
+		err = drgn_dwarf_index_iterator_init(&it, ns, name,
+						     colons - name, &(uint64_t){DW_TAG_namespace}, 1);
+		if (err)
+			return err;
+		struct drgn_dwarf_index_die *index_die =
+			drgn_dwarf_index_iterator_next(&it);
+		if (!index_die) {
+			// We failed looking up a ns, lets just try looking up the rest of the string as a type
+			break;
+		}
+		ns = index_die->namespace;
+		name_len -= colons + 2 - name;
+		name = colons + 2;
+	}
+
+	struct drgn_dwarf_index_iterator it;
+	err = drgn_dwarf_index_iterator_init(&it, ns, name, name_len, NULL, 0);
+	if (err)
+		return err;
+	struct drgn_dwarf_index_die *index_die;
+	while ((index_die = drgn_dwarf_index_iterator_next(&it))) {
+		Dwarf_Die die;
+		err = drgn_dwarf_index_get_die(index_die, &die);
+		if (err)
+			return err;
+		err = drgn_type_from_dwarf(dbinfo, index_die->module,
+					   &die, ret);
+		if (err)
+			return err;
+		/*
+		 * For DW_TAG_base_type, we need to check that the type
+		 * we found was the right kind.
+		 */
+		// if (drgn_type_kind(ret->type) == kind)
+		// 	return NULL;
+		return NULL;
+	}
+	return &drgn_not_found;
+}
+
+struct drgn_error *
 drgn_debug_info_find_object(const char *name, size_t name_len,
 			    const char *filename,
 			    enum drgn_find_object_flags flags, void *arg,

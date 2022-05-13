@@ -348,6 +348,11 @@ drgn_abstract_origin_module(struct drgn_program *prog,
 			    uintptr_t abstract_origin,
 			    struct drgn_module **ret);
 
+struct drgn_error *
+drgn_debug_info_find_type_by_pure_name(const char *name, size_t name_len,
+    void *arg,
+    struct drgn_qualified_type *ret);
+
 /** @} */
 
 #endif /* DRGN_DEBUG_INFO_DWARF_H */
