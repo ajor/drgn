@@ -251,6 +251,32 @@ drgn_template_parameter_object(struct drgn_type_template_parameter *parameter,
 	return NULL;
 }
 
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_member_function_type(struct drgn_type_member_function *member,
+			  struct drgn_qualified_type *ret)
+{
+	struct drgn_error *err =
+		drgn_lazy_object_evaluate(&member->func);
+	if (!err)
+		*ret = drgn_object_qualified_type(&member->func.obj);
+	return err;
+}
+
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_member_function_object(struct drgn_type_member_function *member,
+			    const struct drgn_object **ret)
+{
+	struct drgn_error *err =
+		drgn_lazy_object_evaluate(&member->func);
+	if (err)
+		return err;
+	if (member->func.obj.kind == DRGN_OBJECT_ABSENT)
+		*ret = NULL;
+	else
+		*ret = &member->func.obj;
+	return NULL;
+}
+
 static struct hash_pair
 drgn_type_dedupe_hash_pair(struct drgn_type * const *entry)
 {
@@ -527,6 +553,7 @@ drgn_template_parameters_builder_add(struct drgn_template_parameters_builder *bu
 }
 
 DEFINE_VECTOR_FUNCTIONS(drgn_type_member_vector)
+DEFINE_VECTOR_FUNCTIONS(drgn_type_member_function_vector)
 
 void drgn_compound_type_builder_init(struct drgn_compound_type_builder *builder,
 				     struct drgn_program *prog,
@@ -539,6 +566,7 @@ void drgn_compound_type_builder_init(struct drgn_compound_type_builder *builder,
 	drgn_template_parameters_builder_init(&builder->parents_builder, prog);
 	builder->kind = kind;
 	drgn_type_member_vector_init(&builder->members);
+	drgn_type_member_function_vector_init(&builder->functions);
 }
 
 void
@@ -547,6 +575,7 @@ drgn_compound_type_builder_deinit(struct drgn_compound_type_builder *builder)
 	for (size_t i = 0; i < builder->members.size; i++)
 		drgn_lazy_object_deinit(&builder->members.data[i].object);
 	drgn_type_member_vector_deinit(&builder->members);
+	drgn_type_member_function_vector_deinit(&builder->functions);
 	drgn_template_parameters_builder_deinit(&builder->template_builder);
 	drgn_template_parameters_builder_deinit(&builder->parents_builder);
 }
@@ -572,6 +601,23 @@ drgn_compound_type_builder_add_member(struct drgn_compound_type_builder *builder
 }
 
 struct drgn_error *
+drgn_compound_type_builder_add_function(struct drgn_compound_type_builder *builder,
+					const union drgn_lazy_object *object)
+{
+	struct drgn_error *err =
+		drgn_lazy_object_check_prog(object,
+					    builder->template_builder.prog);
+	if (err)
+		return err;
+	struct drgn_type_member_function *member_func =
+		drgn_type_member_function_vector_append_entry(&builder->functions);
+	if (!member_func)
+		return &drgn_enomem;
+	member_func->func = *object;
+	return NULL;
+}
+
+struct drgn_error *
 drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 			  const char *tag, uint64_t size, bool is_complete,
 			  const struct drgn_language *lang,
@@ -592,6 +638,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 	}
 
 	if (!builder->members.size &&
+	    !builder->functions.size &&
 	    !builder->template_builder.parameters.size &&
 	    !builder->parents_builder.parameters.size) {
 		struct drgn_type key = {
@@ -608,7 +655,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 		};
 		err = find_or_create_type(&key, ret);
 		if (!err)
-			drgn_type_member_vector_deinit(&builder->members);
+			drgn_type_member_vector_deinit(&builder->members); // TODO what about the rest?
 		return err;
 	}
 
@@ -621,6 +668,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 	}
 
 	drgn_type_member_vector_shrink_to_fit(&builder->members);
+	drgn_type_member_function_vector_shrink_to_fit(&builder->functions);
 	drgn_type_template_parameter_vector_shrink_to_fit(&builder->template_builder.parameters);
 	drgn_type_template_parameter_vector_shrink_to_fit(&builder->parents_builder.parameters);
 
@@ -631,6 +679,8 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 	type->_private.size = size;
 	type->_private.members = builder->members.data;
 	type->_private.num_members = builder->members.size;
+	type->_private.functions = builder->functions.data;
+	type->_private.num_functions = builder->functions.size;
 	type->_private.template_parameters =
 		builder->template_builder.parameters.data;
 	type->_private.num_template_parameters =
@@ -919,7 +969,7 @@ drgn_function_type_builder_add_parameter(struct drgn_function_type_builder *buil
 
 struct drgn_error *
 drgn_function_type_create(struct drgn_function_type_builder *builder,
-			  struct drgn_qualified_type return_type,
+			  const char *tag, struct drgn_qualified_type return_type,
 			  bool is_variadic, const struct drgn_language *lang,
 			  struct drgn_type **ret)
 {
@@ -938,6 +988,7 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 				.kind = DRGN_TYPE_FUNCTION,
 				.is_complete = true,
 				.primitive = DRGN_NOT_PRIMITIVE_TYPE,
+				.tag = tag,
 				.type = return_type.type,
 				.qualifiers = return_type.qualifiers,
 				.is_variadic = is_variadic,
@@ -966,6 +1017,7 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 	type->_private.kind = DRGN_TYPE_FUNCTION;
 	type->_private.is_complete = true;
 	type->_private.primitive = DRGN_NOT_PRIMITIVE_TYPE;
+	type->_private.tag = tag;
 	type->_private.type = return_type.type;
 	type->_private.qualifiers = return_type.qualifiers;
 	type->_private.parameters = builder->parameters.data;
