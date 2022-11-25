@@ -273,7 +273,7 @@ drgn_compound_type_builder_add_function(struct drgn_compound_type_builder *build
 struct drgn_error *
 drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 			  const char *tag, uint64_t size, bool is_complete,
-			  const struct drgn_language *lang,
+			  uint64_t virtuality, const struct drgn_language *lang,
 			  struct drgn_type **ret);
 
 DEFINE_VECTOR_TYPE(drgn_type_enumerator_vector, struct drgn_type_enumerator)
@@ -470,8 +470,8 @@ drgn_function_type_builder_add_parameter(struct drgn_function_type_builder *buil
 struct drgn_error *
 drgn_function_type_create(struct drgn_function_type_builder *builder,
 			  const char *tag, struct drgn_qualified_type return_type,
-			  bool is_variadic, const struct drgn_language *lang,
-			  struct drgn_type **ret);
+			  bool is_variadic, uint64_t virtuality,
+			  const struct drgn_language *lang, struct drgn_type **ret);
 
 /** @} */
 
