@@ -620,7 +620,7 @@ drgn_compound_type_builder_add_function(struct drgn_compound_type_builder *build
 struct drgn_error *
 drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 			  const char *tag, uint64_t size, bool is_complete,
-			  const struct drgn_language *lang,
+			  uint8_t virtuality, const struct drgn_language *lang,
 			  struct drgn_type **ret)
 {
 	struct drgn_error *err;
@@ -648,6 +648,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 				.primitive = DRGN_NOT_PRIMITIVE_TYPE,
 				.tag = tag,
 				.size = size,
+				.virtuality = virtuality,
 				.program = prog,
 				.language =
 					lang ? lang : drgn_program_language(prog),
@@ -677,6 +678,7 @@ drgn_compound_type_create(struct drgn_compound_type_builder *builder,
 	type->_private.primitive = DRGN_NOT_PRIMITIVE_TYPE;
 	type->_private.tag = tag;
 	type->_private.size = size;
+	type->_private.virtuality = virtuality;
 	type->_private.members = builder->members.data;
 	type->_private.num_members = builder->members.size;
 	type->_private.functions = builder->functions.data;
@@ -970,8 +972,8 @@ drgn_function_type_builder_add_parameter(struct drgn_function_type_builder *buil
 struct drgn_error *
 drgn_function_type_create(struct drgn_function_type_builder *builder,
 			  const char *tag, struct drgn_qualified_type return_type,
-			  bool is_variadic, const struct drgn_language *lang,
-			  struct drgn_type **ret)
+			  bool is_variadic, uint8_t virtuality,
+			  const struct drgn_language *lang, struct drgn_type **ret)
 {
 	struct drgn_error *err;
 	struct drgn_program *prog = builder->template_builder.prog;
@@ -992,6 +994,7 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 				.type = return_type.type,
 				.qualifiers = return_type.qualifiers,
 				.is_variadic = is_variadic,
+				.virtuality = virtuality,
 				.program = prog,
 				.language =
 					lang ? lang : drgn_program_language(prog),
@@ -1023,6 +1026,7 @@ drgn_function_type_create(struct drgn_function_type_builder *builder,
 	type->_private.parameters = builder->parameters.data;
 	type->_private.num_parameters = builder->parameters.size;
 	type->_private.is_variadic = is_variadic;
+	type->_private.virtuality = virtuality;
 	type->_private.template_parameters =
 		builder->template_builder.parameters.data;
 	type->_private.num_template_parameters =
