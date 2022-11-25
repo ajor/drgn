@@ -1812,6 +1812,7 @@ static DrgnType *Program_compound_type(Program *self, PyObject *args,
 	struct drgn_error *err = drgn_compound_type_create(&builder, tag,
 							   size.uvalue,
 							   members_obj != Py_None,
+							   0, // TODO virtuality
 							   language,
 							   &qualified_type.type);
 	if (err) {
@@ -2310,6 +2311,7 @@ DrgnType *Program_function_type(Program *self, PyObject *args, PyObject *kwds)
 							   "TODO",
 							   DrgnType_unwrap(return_type_obj),
 							   is_variadic,
+							   0, // TODO virtuality
 							   language,
 							   &qualified_type.type);
 	if (err) {
