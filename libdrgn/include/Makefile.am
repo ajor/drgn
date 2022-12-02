@@ -1,5 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-# SPDX-License-Identifier: GPL-3.0+
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
 # "Install" the elfutils headers to the build directory.
 
