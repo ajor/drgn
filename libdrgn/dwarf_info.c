@@ -9091,6 +9091,12 @@ drgn_object_locate(const struct drgn_object_locator *locator,
 		location->expr_size, NULL, drgn_regs, ret);
 }
 
+static const uint64_t namespace_tags[] = {
+	DW_TAG_namespace;
+};
+
+#define NAMESPACE_TAGS_LENGTH (sizeof(namespace_tags) / sizeof(*namespace_tags))
+
 static const uint64_t type_tags[] = {
 	DW_TAG_array_type,
 	DW_TAG_class_type,
@@ -9222,6 +9228,125 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 						     namespaces->data[0], NULL,
 						     0, type_tags,
 						     TYPE_TAGS_LENGTH);
+		if (err)
+			return err;
+	}
+	Dwarf_Die die;
+	err = drgn_dwarf_index_get_die(index_die, &die);
+	if (err)
+		return err;
+	err = drgn_type_from_dwarf(iter->prog->dbinfo, index_die->module, &die,
+				   &iter->curr);
+	if (err)
+		return err;
+	*ret = &iter->curr;
+	return NULL;
+}
+
+static const uint64_t func_tags[] = {
+	DW_TAG_subprogram,
+};
+
+#define FUNC_TAGS_LENGTH (sizeof(func_tags) / sizeof(*func_tags))
+
+struct drgn_func_iterator {
+	struct drgn_program *prog;
+	struct drgn_dwarf_index_iterator it;
+	struct namespace_vector namespaces;
+	struct drgn_qualified_type curr;
+};
+
+LIBDRGN_PUBLIC
+struct drgn_error *drgn_func_iterator_create(struct drgn_program *prog,
+					     struct drgn_func_iterator **ret)
+{
+	if (!getenv(enable_type_iterator_env_var))
+		return drgn_error_format(
+			DRGN_ERROR_INVALID_ARGUMENT,
+			"the environment variable '%s' must be set in order to create a type iterator",
+			enable_type_iterator_env_var);
+	struct drgn_func_iterator *iter = malloc(sizeof(*iter));
+	if (!iter)
+		return &drgn_enomem;
+	struct drgn_error *err;
+	err = drgn_dwarf_index_iterator_init(&iter->it,
+					     &prog->dbinfo->dwarf.global, NULL,
+					     0, func_tags, FUNC_TAGS_LENGTH);
+	if (err) {
+		free(iter);
+		return err;
+	}
+	iter->prog = prog;
+	namespace_vector_init(&iter->namespaces);
+	struct drgn_namespace_dwarf_index **namespace;
+	namespace = namespace_vector_append_entry(&iter->namespaces);
+	if (!namespace) {
+		namespace_vector_deinit(&iter->namespaces);
+		free(iter);
+		return &drgn_enomem;
+	}
+	*namespace = &prog->dbinfo->dwarf.global;
+	*ret = iter;
+	return NULL;
+}
+
+LIBDRGN_PUBLIC
+void drgn_func_iterator_destroy(struct drgn_func_iterator *iter)
+{
+	if (iter) {
+		namespace_vector_deinit(&iter->namespaces);
+		free(iter);
+	}
+}
+
+LIBDRGN_PUBLIC
+struct drgn_error *drgn_func_iterator_next(struct drgn_func_iterator *iter,
+					   struct drgn_qualified_type **ret)
+{
+	struct namespace_vector *namespaces = &iter->namespaces;
+	struct drgn_dwarf_index_die *index_die;
+	struct drgn_error *err;
+	while (!(index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
+		if (namespaces->size == 0) {
+			// Iterator has been exhausted
+			*ret = NULL;
+			return NULL;
+		}
+
+		// Swap-remove the namespace we just finished processing
+		struct drgn_namespace_dwarf_index *prev_namespace =
+			namespaces->data[0];
+		namespaces->data[0] = namespaces->data[namespaces->size - 1];
+		namespace_vector_pop(namespaces);
+
+		// If we've reached this point, we have gone through all of the types
+		// within `prev_namespace`, so we find all of the namespaces within it
+		// here so that we can recursively process them.
+		err = drgn_dwarf_index_iterator_init(
+			&iter->it, prev_namespace, NULL, 0,
+			namespace_tags, NAMESPACE_TAGS_LENGTH);
+		if (err)
+			return err;
+		while ((index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
+			struct drgn_namespace_dwarf_index **next_namespace =
+				namespace_vector_append_entry(namespaces);
+			if (!next_namespace)
+				return &drgn_enomem;
+			*next_namespace = index_die->namespace;
+		}
+		if (namespaces->size == 0) {
+			// `prev_namespace` contained no other namespaces within it,
+			// ending the recursion.
+			namespace_vector_pop(namespaces);
+			*ret = NULL;
+			return NULL;
+		}
+
+		// Begin processing the next namespace
+		err = drgn_dwarf_index_iterator_init(&iter->it,
+						     namespaces->data[0], NULL,
+						     0, func_tags,
+						     FUNC_TAGS_LENGTH);
 		if (err)
 			return err;
 	}
