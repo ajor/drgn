@@ -8869,6 +8869,26 @@ err:
 	return err;
 }
 
+LIBDRGN_PUBLIC struct drgn_error *
+drgn_type_linkage_name(struct drgn_type *type, const char **str_ret)
+{
+	Dwarf_Die die;
+	struct drgn_error *err;
+
+	struct drgn_dwarf_index_die hack_index = {
+		.addr = type->_private.die_addr,
+		.file = type->_private.file};
+	if ((err = drgn_dwarf_index_get_die(&hack_index, &die)))
+		return err;
+
+	Dwarf_Attribute linkage_name;
+	if (!dwarf_attr(&die, DW_AT_linkage_name, &linkage_name))
+		return drgn_error_create(DRGN_ERROR_INVALID_ARGUMENT, "type doesn't have a linkage name");
+
+	*str_ret = dwarf_formstring(&linkage_name);
+	return NULL;
+}
+
 LIBDRGN_PUBLIC struct drgn_error *drgn_type_dwarf_die(struct drgn_type *type,
 						      Dwarf_Die *ret)
 {
