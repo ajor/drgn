@@ -2117,14 +2117,15 @@ drgn_type_language(struct drgn_type *type)
 
 /**
  * Get whether a kind of type has a name. This is true for integer, boolean,
- * floating-point, and typedef types.
+ * floating-point, typedef, and function types.
  */
 static inline bool drgn_type_kind_has_name(enum drgn_type_kind kind)
 {
 	return (kind == DRGN_TYPE_INT ||
 		kind == DRGN_TYPE_BOOL ||
 		kind == DRGN_TYPE_FLOAT ||
-		kind == DRGN_TYPE_TYPEDEF);
+		kind == DRGN_TYPE_TYPEDEF ||
+		kind == DRGN_TYPE_FUNCTION);
 }
 /** Get whether a type has a name. @sa drgn_type_kind_has_name() */
 static inline bool drgn_type_has_name(struct drgn_type *type)
