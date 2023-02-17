@@ -9305,7 +9305,6 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		if (namespaces->size == 0) {
 			// `prev_namespace` contained no other namespaces within it,
 			// ending the recursion.
-			namespace_vector_pop(namespaces);
 			*ret = NULL;
 			return NULL;
 		}
@@ -9424,7 +9423,6 @@ struct drgn_error *drgn_func_iterator_next(struct drgn_func_iterator *iter,
 		if (namespaces->size == 0) {
 			// `prev_namespace` contained no other namespaces within it,
 			// ending the recursion.
-			namespace_vector_pop(namespaces);
 			*ret = NULL;
 			return NULL;
 		}
