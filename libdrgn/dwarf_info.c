@@ -9275,14 +9275,13 @@ static const uint64_t type_tags[] = {
 #define TYPE_TAGS_LENGTH (sizeof(type_tags) / sizeof(*type_tags))
 
 DEFINE_VECTOR(dwarf_index_iterator_vector, struct drgn_dwarf_index_iterator)
-DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index*)
 
 struct drgn_type_iterator {
 	struct drgn_program *prog;
 	struct drgn_dwarf_index_iterator type_iter;
-	struct namespace_vector namespaces;
 	struct dwarf_index_iterator_vector namespace_iters;
-	struct drgn_qualified_type curr;
+	struct drgn_dwarf_index_die_vector namespace_dies;
+	struct drgn_qualified_type curr; // TODO check if used
 	struct string_builder namespace_name;
 };
 
@@ -9308,16 +9307,25 @@ struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 	}
 	iter->prog = prog;
 
-	// TODO don't push to vector during initialisation?
-	namespace_vector_init(&iter->namespaces);
-	struct drgn_namespace_dwarf_index *global_ns = &prog->dbinfo->dwarf.global;
-	if (!namespace_vector_append(&iter->namespaces, &global_ns)) {
-		namespace_vector_deinit(&iter->namespaces);
+	dwarf_index_iterator_vector_init(&iter->namespace_iters);
+	struct drgn_dwarf_index_iterator *ns_iter = dwarf_index_iterator_vector_append_entry(&iter->namespace_iters);
+	if (!ns_iter) {
+		dwarf_index_iterator_vector_deinit(&iter->namespace_iters);
 		free(iter);
 		return &drgn_enomem;
 	}
 
-	dwarf_index_iterator_vector_init(&iter->namespace_iters);
+	struct drgn_namespace_dwarf_index *global_ns = &prog->dbinfo->dwarf.global;
+	err = drgn_dwarf_index_iterator_init(ns_iter, global_ns, NULL, 0,
+			&(uint64_t){DW_TAG_namespace}, 1);
+	if (err) {
+		dwarf_index_iterator_vector_deinit(&iter->namespace_iters);
+		free(iter);
+		return err;
+	}
+
+	// TODO don't push to vector during initialisation?
+	drgn_dwarf_index_die_vector_init(&iter->namespace_dies);
 
 	memset(&iter->namespace_name, 0, sizeof(iter->namespace_name));
 	string_builder_reserve(&iter->namespace_name, 128);
@@ -9330,8 +9338,8 @@ LIBDRGN_PUBLIC
 void drgn_type_iterator_destroy(struct drgn_type_iterator *iter)
 {
 	if (iter) {
-		namespace_vector_deinit(&iter->namespaces);
 		dwarf_index_iterator_vector_deinit(&iter->namespace_iters);
+		drgn_dwarf_index_die_vector_deinit(&iter->namespace_dies);
 		free(iter->namespace_name.str);
 		free(iter);
 	}
@@ -9342,7 +9350,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 					   struct drgn_qualified_type **ret)
 {
 	struct dwarf_index_iterator_vector *namespace_iters = &iter->namespace_iters;
-	struct namespace_vector *namespaces = &iter->namespaces;
+	struct drgn_dwarf_index_die_vector *namespace_dies = &iter->namespace_dies;
 	struct drgn_error *err;
 
 	/*
@@ -9375,7 +9383,11 @@ get_next_type:
 	 *   4. Initialise new type iterator for the next namespace
 	 *   5. Return first type from type_iter
 	 */
-	struct drgn_namespace_dwarf_index *curr_namespace = namespaces->data[namespaces->size - 1];
+	struct drgn_namespace_dwarf_index *curr_namespace;
+	if (namespace_dies->size > 0)
+		curr_namespace = namespace_dies->data[namespace_dies->size - 1].namespace;
+	else
+		curr_namespace = &iter->prog->dbinfo->dwarf.global;
 
 	struct drgn_dwarf_index_iterator *ns_iter = dwarf_index_iterator_vector_append_entry(namespace_iters);
 	if (!ns_iter)
@@ -9392,17 +9404,30 @@ get_next_ns:
 	ns_index_die = drgn_dwarf_index_iterator_next(ns_iter);
 	if (ns_index_die) {
 		// Push next namespace into namespace stack (TODO namespaces and namespace_iters stacks are out of sync by 1 level)
-		struct drgn_namespace_dwarf_index *next_namespace = ns_index_die->namespace;
-		if (!namespace_vector_append(namespaces, &next_namespace))
+		if (!drgn_dwarf_index_die_vector_append(namespace_dies, ns_index_die))
 			return &drgn_enomem;
 
 		// Append to cached namespace name
-		if (!string_builder_append(&iter->namespace_name, "::"))
-			return &drgn_enomem;
-		if (!string_builder_append(&iter->namespace_name, "mynamespaceName"))
+		Dwarf_Die die;
+		err = drgn_dwarf_index_get_die(ns_index_die, &die);
+		if (err)
+			return err;
+
+		const char *ns_name;
+		err = drgn_dwarf_die_name(&die, &ns_name);
+		if (err)
+			return err;
+
+		if (iter->namespace_name.len > 0) {
+			if (!string_builder_append(&iter->namespace_name, "::"))
+				return &drgn_enomem;
+		}
+		if (!string_builder_append(&iter->namespace_name, ns_name))
 			return &drgn_enomem;
 
 		// Reset "type_iter" to point to the first type in the new namespace
+		// TODO deinit old type_iter
+		struct drgn_namespace_dwarf_index *next_namespace = ns_index_die->namespace;
 		err = drgn_dwarf_index_iterator_init(&iter->type_iter,
 						     next_namespace, NULL,
 						     0, type_tags,
@@ -9412,6 +9437,12 @@ get_next_ns:
 
 		// Return the next type (TODO don't use goto?)
 		goto get_next_type;
+	}
+	else {
+		// Push junk to balance stacks - it will be popped in the next step without being used
+		struct drgn_dwarf_index_die dummy_index_die = {0};
+		if (!drgn_dwarf_index_die_vector_append(namespace_dies, &dummy_index_die))
+			return &drgn_enomem;
 	}
 
 
@@ -9424,12 +9455,25 @@ get_next_ns:
 	 *   5. Initialise new type iterator for the next namespace
 	 *   6. Return first type from type_iter
 	 */
-	if (namespace_iters->size > 0) {
+	assert(namespace_iters->size == namespace_dies->size + 1);
+	if (namespace_dies->size > 0) {
+		// TODO deinit popped namespace_iter
 		dwarf_index_iterator_vector_pop(namespace_iters);
-		namespace_vector_pop(namespaces);
+		drgn_dwarf_index_die_vector_pop(namespace_dies);
 		string_builder_clear(&iter->namespace_name);
-		// TODO regenerate namespace name
-		string_builder_append(&iter->namespace_name, "TODO Regenerated");
+		for (size_t i=0; i<namespace_dies->size; i++) {
+			Dwarf_Die die;
+			err = drgn_dwarf_index_get_die(&namespace_dies->data[i], &die);
+			if (err)
+				return err;
+
+			const char *ns_name;
+			err = drgn_dwarf_die_name(&die, &ns_name);
+			if (err)
+				return err;
+
+			string_builder_append(&iter->namespace_name, ns_name);
+		}
 		goto get_next_ns;
 	}
 
@@ -9445,6 +9489,8 @@ static const uint64_t func_tags[] = {
 };
 
 #define FUNC_TAGS_LENGTH (sizeof(func_tags) / sizeof(*func_tags))
+
+DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index*)
 
 struct drgn_func_iterator {
 	struct drgn_program *prog;
