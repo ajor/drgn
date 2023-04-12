@@ -102,3 +102,11 @@ bool string_builder_line_break(struct string_builder *sb)
 		return true;
 	return string_builder_appendc(sb, '\n');
 }
+
+void string_builder_clear(struct string_builder *sb)
+{
+	if (sb->len == 0)
+		return;
+	sb->str[0] = '\0';
+	sb->len = 0;
+}

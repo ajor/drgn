@@ -164,6 +164,13 @@ bool string_builder_vappendf(struct string_builder *sb, const char *format,
 bool string_builder_line_break(struct string_builder *sb);
 
 /**
+ * Clears the contents of a @ref string_builder without releasing the memory.
+ *
+ * @param[in] sb String builder.
+ */
+void string_builder_clear(struct string_builder *sb);
+
+/**
  * Callback to append to a string later.
  *
  * Instead of providing functionality to prepend to a @ref string_builder, we
