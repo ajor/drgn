@@ -547,6 +547,7 @@ drgn_dwarf_index_read_cus(struct drgn_dwarf_index_state *state,
 								   &this_file);
 				if (err)
 					return err;
+				this_file->scns[DRGN_SCN_DEBUG_ADDR] = file->scns[DRGN_SCN_DEBUG_ADDR];
 				this_scn = DRGN_SCN_DEBUG_INFO;
 				this_buf = this_file->scn_data[this_scn]->d_buf;
 				this_buf_len = this_file->scn_data[this_scn]->d_size;
@@ -3673,8 +3674,8 @@ static struct drgn_error *drgn_dwarf_next_addrx(struct binary_buffer *bb,
 
 	if (!*addr_base) {
 		Dwarf_Attribute attr_mem, *attr;
-		if (!(attr = dwarf_attr(cu_die, DW_AT_addr_base, &attr_mem)) &&
-		    !(attr = dwarf_attr(cu_die, DW_AT_GNU_addr_base,
+		if (!(attr = dwarf_attr_integrate(cu_die, DW_AT_addr_base, &attr_mem)) &&
+		    !(attr = dwarf_attr_integrate(cu_die, DW_AT_GNU_addr_base,
 					&attr_mem))) {
 			return drgn_error_create(DRGN_ERROR_OTHER,
 						 "indirect address without DW_AT_addr_base");
@@ -3691,8 +3692,10 @@ static struct drgn_error *drgn_dwarf_next_addrx(struct binary_buffer *bb,
 		if (err)
 			return err;
 
-		if (base > file->scn_data[DRGN_SCN_DEBUG_ADDR]->d_size ||
-		    base == 0) {
+		if (base > file->scn_data[DRGN_SCN_DEBUG_ADDR]->d_size
+		    // TODO Why was this here?
+		    // || base == 0
+			) {
 			return drgn_error_create(DRGN_ERROR_OTHER,
 						 "DW_AT_addr_base is out of bounds");
 		}
