@@ -3603,6 +3603,7 @@ struct drgn_dwarf_index_iterator {
 	size_t shards_remaining;
 	uint32_t index;
 	bool match_all;
+	struct drgn_dwarf_index_die *current;
 };
 
 /**
@@ -3648,6 +3649,7 @@ drgn_dwarf_index_iterator_init(struct drgn_dwarf_index_iterator *it,
 	}
 	it->tags = tags;
 	it->num_tags = num_tags;
+	it->current = NULL;
 	return NULL;
 }
 
@@ -3685,13 +3687,16 @@ drgn_dwarf_index_iterator_next(struct drgn_dwarf_index_iterator *it)
 			struct drgn_dwarf_index_die *die =
 				&it->shard->dies.data[it->index];
 			it->index = it->match_all ? it->index + 1 : die->next;
-			if (drgn_dwarf_index_iterator_matches_tag(it, die))
+			if (drgn_dwarf_index_iterator_matches_tag(it, die)) {
+				it->current = die;
 				return die;
+			}
 		}
 		it->index = 0;
 		it->shards_remaining--;
 		it->shard++;
 	}
+	it->current = NULL;
 	return NULL;
 }
 
@@ -9279,8 +9284,7 @@ DEFINE_VECTOR(dwarf_index_iterator_vector, struct drgn_dwarf_index_iterator)
 struct drgn_type_iterator {
 	struct drgn_program *prog;
 	struct drgn_dwarf_index_iterator type_iter;
-	struct dwarf_index_iterator_vector namespace_iters;
-	struct drgn_dwarf_index_die_vector namespace_dies;
+	struct dwarf_index_iterator_vector namespace_iter_stack;
 	struct drgn_qualified_type curr; // TODO check if used
 	struct string_builder namespace_name;
 };
@@ -9298,7 +9302,7 @@ struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 	if (!iter)
 		return &drgn_enomem;
 	struct drgn_error *err;
-	err = drgn_dwarf_index_iterator_init(&iter->type_iter,
+	err = drgn_dwarf_index_iterator_init(&iter->type_iter, // TODO need to deinit?
 					     &prog->dbinfo->dwarf.global, NULL,
 					     0, type_tags, TYPE_TAGS_LENGTH);
 	if (err) {
@@ -9307,25 +9311,22 @@ struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 	}
 	iter->prog = prog;
 
-	dwarf_index_iterator_vector_init(&iter->namespace_iters);
-	struct drgn_dwarf_index_iterator *ns_iter = dwarf_index_iterator_vector_append_entry(&iter->namespace_iters);
-	if (!ns_iter) {
-		dwarf_index_iterator_vector_deinit(&iter->namespace_iters);
+	dwarf_index_iterator_vector_init(&iter->namespace_iter_stack);
+	struct drgn_dwarf_index_iterator *global_ns_iter = dwarf_index_iterator_vector_append_entry(&iter->namespace_iter_stack);
+	if (!global_ns_iter) {
+		dwarf_index_iterator_vector_deinit(&iter->namespace_iter_stack);
 		free(iter);
 		return &drgn_enomem;
 	}
 
 	struct drgn_namespace_dwarf_index *global_ns = &prog->dbinfo->dwarf.global;
-	err = drgn_dwarf_index_iterator_init(ns_iter, global_ns, NULL, 0,
+	err = drgn_dwarf_index_iterator_init(global_ns_iter, global_ns, NULL, 0,
 			&(uint64_t){DW_TAG_namespace}, 1);
 	if (err) {
-		dwarf_index_iterator_vector_deinit(&iter->namespace_iters);
+		dwarf_index_iterator_vector_deinit(&iter->namespace_iter_stack);
 		free(iter);
 		return err;
 	}
-
-	// TODO don't push to vector during initialisation?
-	drgn_dwarf_index_die_vector_init(&iter->namespace_dies);
 
 	memset(&iter->namespace_name, 0, sizeof(iter->namespace_name));
 	string_builder_reserve(&iter->namespace_name, 128);
@@ -9338,8 +9339,7 @@ LIBDRGN_PUBLIC
 void drgn_type_iterator_destroy(struct drgn_type_iterator *iter)
 {
 	if (iter) {
-		dwarf_index_iterator_vector_deinit(&iter->namespace_iters);
-		drgn_dwarf_index_die_vector_deinit(&iter->namespace_dies);
+		dwarf_index_iterator_vector_deinit(&iter->namespace_iter_stack);
 		free(iter->namespace_name.str);
 		free(iter);
 	}
@@ -9349,72 +9349,104 @@ LIBDRGN_PUBLIC
 struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 					   struct drgn_qualified_type **ret)
 {
-	struct dwarf_index_iterator_vector *namespace_iters = &iter->namespace_iters;
-	struct drgn_dwarf_index_die_vector *namespace_dies = &iter->namespace_dies;
+	struct dwarf_index_iterator_vector *namespace_iter_stack = &iter->namespace_iter_stack;
 	struct drgn_error *err;
 
 	/*
-	 * Step 1: Go to next type in the current namespace
-	 *   1. Return next type from type_iter
+	 * Attempt to get the next type in the current namespace
 	 */
 	struct drgn_dwarf_index_die *type_index_die;
-get_next_type:
-	type_index_die = drgn_dwarf_index_iterator_next(&iter->type_iter);
-	if (type_index_die) {
-		Dwarf_Die die;
-		err = drgn_dwarf_index_get_die(type_index_die, &die);
+	while (!(type_index_die = drgn_dwarf_index_iterator_next(&iter->type_iter))) {
+		/*
+		 * There are no more types in this namespace
+		 *
+		 * Initialise new iterator for child namespaces of this namespace
+		 */
+		struct drgn_namespace_dwarf_index *curr_namespace;
+		if (namespace_iter_stack->size == 0 ||
+				namespace_iter_stack->data[namespace_iter_stack->size - 1].current == NULL)
+			curr_namespace = &iter->prog->dbinfo->dwarf.global;
+		else
+			curr_namespace = namespace_iter_stack->data[namespace_iter_stack->size - 1].current->namespace;
+		struct drgn_dwarf_index_iterator *next_namespace_iter = dwarf_index_iterator_vector_append_entry(namespace_iter_stack);
+		if (!next_namespace_iter)
+			return &drgn_enomem;
+		err = drgn_dwarf_index_iterator_init(next_namespace_iter, curr_namespace, NULL, 0,
+				&(uint64_t){DW_TAG_namespace}, 1);
 		if (err)
 			return err;
-		err = drgn_type_from_dwarf(iter->prog->dbinfo, type_index_die->module, &die,
-				&iter->curr);
-		if (err)
-			return err;
 
-		iter->curr.type->_private.namespace_name = string_builder_null_terminate(&iter->namespace_name); // TODO strcpy
-		*ret = &iter->curr;
-		return NULL;
-	}
+		/*
+		 * Attempt to get the next child namespace
+		 */
+		struct drgn_dwarf_index_die *next_namespace_index_die;
+		while (!(next_namespace_index_die = drgn_dwarf_index_iterator_next(next_namespace_iter))) {
+			/*
+			 * There are no more child namespaces within the current scope
+			 */
 
-	/*
-	 * Step 2: Go into first sub-namespace of the current namespace
-	 *   1. Create new iterator to walk over sub-namespaces of the current namespace
-	 *   2. Get next sub-namespace
-	 *   3. Push next namespace onto stacks and append to namespace_name
-	 *   4. Initialise new type iterator for the next namespace
-	 *   5. Return first type from type_iter
-	 */
-	struct drgn_namespace_dwarf_index *curr_namespace;
-	if (namespace_dies->size > 0)
-		curr_namespace = namespace_dies->data[namespace_dies->size - 1].namespace;
-	else
-		curr_namespace = &iter->prog->dbinfo->dwarf.global;
+			if (namespace_iter_stack->size <= 1) {
+				/*
+				 * The global namespace is always the bottom of the stack
+				 * If we've reached this point then We've exhausted the global namespace
+				 * => Iteration complete
+				 */
+				*ret = NULL;
+				return NULL;
+			}
 
-	struct drgn_dwarf_index_iterator *ns_iter = dwarf_index_iterator_vector_append_entry(namespace_iters);
-	if (!ns_iter)
-		return &drgn_enomem;
+			/* Pop from the namespace stack to resume iterating at the parent's level */
+			// TODO deinit:
+			dwarf_index_iterator_vector_pop(namespace_iter_stack);
 
-	err = drgn_dwarf_index_iterator_init(ns_iter, curr_namespace, NULL, 0,
-			&(uint64_t){DW_TAG_namespace}, 1);
-	if (err)
-		return err;
+			/* Re-generate the cached namespace_name for the now-current namespace */
+			string_builder_clear(&iter->namespace_name);
+			for (size_t i=1; i<namespace_iter_stack->size; i++) {
+				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[i].current;
+				Dwarf_Die die;
+				err = drgn_dwarf_index_get_die(ns_index_die, &die);
+				if (err)
+					return err;
 
-	struct drgn_dwarf_index_die *ns_index_die;
-get_next_ns:
-	ns_iter = &namespace_iters->data[namespace_iters->size - 1];
-	ns_index_die = drgn_dwarf_index_iterator_next(ns_iter);
-	if (ns_index_die) {
-		// Push next namespace into namespace stack (TODO namespaces and namespace_iters stacks are out of sync by 1 level)
-		if (!drgn_dwarf_index_die_vector_append(namespace_dies, ns_index_die))
+				const char *ns_name;
+				err = drgn_dwarf_die_name(&die, &ns_name);
+				if (err)
+					return err;
+
+				if (iter->namespace_name.len > 0) {
+					if (!string_builder_append(&iter->namespace_name, "::"))
+						return &drgn_enomem;
+				}
+				if (!string_builder_append(&iter->namespace_name, ns_name))
+					return &drgn_enomem;
+			}
+
+			/*
+			 * Restore iterator for children of the parent namespace
+			 *
+			 * i.e. siblings of the current namespace
+			 */
+			next_namespace_iter = &namespace_iter_stack->data[namespace_iter_stack->size - 1];
+		}
+
+		/*
+		 * We've found a namespace
+		 *
+		 * Update iterator state to operate on this new namespace
+		 */
+
+		/* Push next namespace iterator onto stack */
+		if (!dwarf_index_iterator_vector_append(namespace_iter_stack, next_namespace_iter))
 			return &drgn_enomem;
 
-		// Append to cached namespace name
-		Dwarf_Die die;
-		err = drgn_dwarf_index_get_die(ns_index_die, &die);
+		/* Append new namespace to cached namespace name */
+		Dwarf_Die ns_die;
+		err = drgn_dwarf_index_get_die(next_namespace_index_die, &ns_die);
 		if (err)
 			return err;
 
 		const char *ns_name;
-		err = drgn_dwarf_die_name(&die, &ns_name);
+		err = drgn_dwarf_die_name(&ns_die, &ns_name);
 		if (err)
 			return err;
 
@@ -9425,63 +9457,162 @@ get_next_ns:
 		if (!string_builder_append(&iter->namespace_name, ns_name))
 			return &drgn_enomem;
 
-		// Reset "type_iter" to point to the first type in the new namespace
+		/* Reset "type_iter" to point to the first type in the new namespace */
 		// TODO deinit old type_iter
-		struct drgn_namespace_dwarf_index *next_namespace = ns_index_die->namespace;
+		struct drgn_namespace_dwarf_index *next_namespace = next_namespace_index_die->namespace;
 		err = drgn_dwarf_index_iterator_init(&iter->type_iter,
 						     next_namespace, NULL,
 						     0, type_tags,
 						     TYPE_TAGS_LENGTH);
 		if (err)
 			return err;
-
-		// Return the next type (TODO don't use goto?)
-		goto get_next_type;
-	}
-	else {
-		// Push junk to balance stacks - it will be popped in the next step without being used
-		struct drgn_dwarf_index_die dummy_index_die = {0};
-		if (!drgn_dwarf_index_die_vector_append(namespace_dies, &dummy_index_die))
-			return &drgn_enomem;
-	}
-
-
-	/*
-	 * Step 3: Go to the next sub-namespace in the parent namespace
-	 *   1. Pop from namespace stacks
-	 *   2. Re-generate namespace_name
-	 *   3. Get next namespace from parent's namespace iterator
-	 *   4. Push next namespace onto stacks and append to namespace_name
-	 *   5. Initialise new type iterator for the next namespace
-	 *   6. Return first type from type_iter
-	 */
-	assert(namespace_iters->size == namespace_dies->size + 1);
-	if (namespace_dies->size > 0) {
-		// TODO deinit popped namespace_iter
-		dwarf_index_iterator_vector_pop(namespace_iters);
-		drgn_dwarf_index_die_vector_pop(namespace_dies);
-		string_builder_clear(&iter->namespace_name);
-		for (size_t i=0; i<namespace_dies->size; i++) {
-			Dwarf_Die die;
-			err = drgn_dwarf_index_get_die(&namespace_dies->data[i], &die);
-			if (err)
-				return err;
-
-			const char *ns_name;
-			err = drgn_dwarf_die_name(&die, &ns_name);
-			if (err)
-				return err;
-
-			string_builder_append(&iter->namespace_name, ns_name);
-		}
-		goto get_next_ns;
 	}
 
 	/*
-	 * No more types to iterate
+	 * We've found a type - extract it from the index die
 	 */
-	*ret = NULL;
+	Dwarf_Die die;
+	err = drgn_dwarf_index_get_die(type_index_die, &die);
+	if (err)
+		return err;
+	err = drgn_type_from_dwarf(iter->prog->dbinfo, type_index_die->module, &die,
+			&iter->curr);
+	if (err)
+		return err;
+
+	iter->curr.type->_private.namespace_name = string_builder_null_terminate(&iter->namespace_name); // TODO strcpy
+	*ret = &iter->curr;
 	return NULL;
+
+//	/*
+//	 * Step 1: Go to next type in the current namespace
+//	 *   1. Return next type from type_iter
+//	 */
+//	struct drgn_dwarf_index_die *type_index_die;
+//get_next_type:
+//	type_index_die = drgn_dwarf_index_iterator_next(&iter->type_iter);
+//	if (type_index_die) {
+//		Dwarf_Die die;
+//		err = drgn_dwarf_index_get_die(type_index_die, &die);
+//		if (err)
+//			return err;
+//		err = drgn_type_from_dwarf(iter->prog->dbinfo, type_index_die->module, &die,
+//				&iter->curr);
+//		if (err)
+//			return err;
+//
+//		iter->curr.type->_private.namespace_name = string_builder_null_terminate(&iter->namespace_name); // TODO strcpy
+//		*ret = &iter->curr;
+//		return NULL;
+//	}
+//
+//	/*
+//	 * Step 2: Go into first sub-namespace of the current namespace
+//	 *   1. Create new iterator to walk over sub-namespaces of the current namespace
+//	 *   2. Get next sub-namespace
+//	 *   3. Push next namespace onto stacks and append to namespace_name
+//	 *   4. Initialise new type iterator for the next namespace
+//	 *   5. Return first type from type_iter
+//	 */
+//	struct drgn_namespace_dwarf_index *curr_namespace;
+//	if (namespace_dies->size > 0)
+//		curr_namespace = namespace_dies->data[namespace_dies->size - 1].namespace;
+//	else
+//		curr_namespace = &iter->prog->dbinfo->dwarf.global;
+//
+//	struct drgn_dwarf_index_iterator *ns_iter = dwarf_index_iterator_vector_append_entry(namespace_iters);
+//	if (!ns_iter)
+//		return &drgn_enomem;
+//
+//	err = drgn_dwarf_index_iterator_init(ns_iter, curr_namespace, NULL, 0,
+//			&(uint64_t){DW_TAG_namespace}, 1);
+//	if (err)
+//		return err;
+//
+//	struct drgn_dwarf_index_die *ns_index_die;
+//get_next_ns:
+//	ns_iter = &namespace_iters->data[namespace_iters->size - 1];
+//	ns_index_die = drgn_dwarf_index_iterator_next(ns_iter);
+//	if (ns_index_die) {
+//		// Push next namespace into namespace stack (TODO namespaces and namespace_iters stacks are out of sync by 1 level)
+//		if (!drgn_dwarf_index_die_vector_append(namespace_dies, ns_index_die))
+//			return &drgn_enomem;
+//
+//		// Append to cached namespace name
+//		Dwarf_Die die;
+//		err = drgn_dwarf_index_get_die(ns_index_die, &die);
+//		if (err)
+//			return err;
+//
+//		const char *ns_name;
+//		err = drgn_dwarf_die_name(&die, &ns_name);
+//		if (err)
+//			return err;
+//
+//		if (iter->namespace_name.len > 0) {
+//			if (!string_builder_append(&iter->namespace_name, "::"))
+//				return &drgn_enomem;
+//		}
+//		if (!string_builder_append(&iter->namespace_name, ns_name))
+//			return &drgn_enomem;
+//
+//		// Reset "type_iter" to point to the first type in the new namespace
+//		// TODO deinit old type_iter
+//		struct drgn_namespace_dwarf_index *next_namespace = ns_index_die->namespace;
+//		err = drgn_dwarf_index_iterator_init(&iter->type_iter,
+//						     next_namespace, NULL,
+//						     0, type_tags,
+//						     TYPE_TAGS_LENGTH);
+//		if (err)
+//			return err;
+//
+//		// Return the next type (TODO don't use goto?)
+//		goto get_next_type;
+//	}
+//	else {
+//		// Push junk to balance stacks - it will be popped in the next step without being used
+//		struct drgn_dwarf_index_die dummy_index_die = {0};
+//		if (!drgn_dwarf_index_die_vector_append(namespace_dies, &dummy_index_die))
+//			return &drgn_enomem;
+//	}
+//
+//
+//	/*
+//	 * Step 3: Go to the next sub-namespace in the parent namespace
+//	 *   1. Pop from namespace stacks
+//	 *   2. Re-generate namespace_name
+//	 *   3. Get next namespace from parent's namespace iterator
+//	 *   4. Push next namespace onto stacks and append to namespace_name
+//	 *   5. Initialise new type iterator for the next namespace
+//	 *   6. Return first type from type_iter
+//	 */
+//	assert(namespace_iters->size == namespace_dies->size + 1);
+//	if (namespace_dies->size > 0) {
+//		// TODO deinit popped namespace_iter
+//		dwarf_index_iterator_vector_pop(namespace_iters);
+//		drgn_dwarf_index_die_vector_pop(namespace_dies);
+//		string_builder_clear(&iter->namespace_name);
+//		for (size_t i=0; i<namespace_dies->size; i++) {
+//			Dwarf_Die die;
+//			err = drgn_dwarf_index_get_die(&namespace_dies->data[i], &die);
+//			if (err)
+//				return err;
+//
+//			const char *ns_name;
+//			err = drgn_dwarf_die_name(&die, &ns_name);
+//			if (err)
+//				return err;
+//
+//			string_builder_append(&iter->namespace_name, ns_name);
+//		}
+//		goto get_next_ns;
+//	}
+//
+//	/*
+//	 * No more types to iterate
+//	 */
+//	*ret = NULL;
+//	return NULL;
 }
 
 static const uint64_t func_tags[] = {
