@@ -106,6 +106,7 @@ struct drgn_dwarf_index_cu {
 	 */
 	uint32_t *abbrev_decls;
 	/** Number of abbreviation codes. */
+	// Reused to specify an abbrev offset as well...
 	size_t num_abbrev_decls;
 	/**
 	 * Buffer of @ref drgn_dwarf_index_abbrev_insn instructions for all
@@ -310,6 +311,7 @@ struct drgn_dwarf_index_pending_cu {
 	size_t len;
 	bool is_64_bit;
 	enum drgn_section_index scn;
+	Dwarf_CU* cudie;
 };
 
 DEFINE_VECTOR_FUNCTIONS(drgn_dwarf_index_pending_cu_vector)
@@ -585,6 +587,11 @@ drgn_dwarf_index_read_cus(struct drgn_dwarf_index_state *state,
 			cu->len = this_next_off - this_off;
 		cu->is_64_bit = offset_size == 8;
 		cu->scn = this_scn;
+
+		if (subdie.cu)
+			cu->cudie = subdie.cu;
+		else
+			cu->cudie = cudie.cu;
 
 		off = next_off;
 	}
@@ -1182,7 +1189,7 @@ static struct drgn_error *read_abbrev_table(struct drgn_dwarf_index_cu *cu,
 	drgn_elf_file_section_buffer_init_index(&buffer, cu->file,
 						DRGN_SCN_DEBUG_ABBREV);
 	/* Checked in read_cu(). */
-	buffer.bb.pos += debug_abbrev_offset;
+	buffer.bb.pos += debug_abbrev_offset + cu->num_abbrev_decls;
 	struct uint32_vector decls = VECTOR_INIT;
 	struct uint8_vector insns = VECTOR_INIT;
 	for (;;) {
@@ -1301,7 +1308,7 @@ static struct drgn_error *read_cu(struct drgn_dwarf_index_cu_buffer *buffer)
 	// implicitly 0.
 	if (version < 5 && buffer->cu->file->scn_data[DRGN_SCN_DEBUG_STR_OFFSETS]) {
 		buffer->cu->str_offsets =
-			buffer->cu->file->scn_data[DRGN_SCN_DEBUG_STR_OFFSETS]->d_buf;
+			buffer->cu->file->scn_data[DRGN_SCN_DEBUG_STR_OFFSETS]->d_buf + (Dwarf_Off)buffer->cu->str_offsets;
 	}
 
 	return read_abbrev_table(buffer->cu, debug_abbrev_offset);
@@ -2916,6 +2923,10 @@ drgn_dwarf_info_update_index(struct drgn_dwarf_index_state *state)
 		for (size_t j = 0; j < state->cus[i].size; j++) {
 			struct drgn_dwarf_index_pending_cu *pending_cu =
 				&state->cus[i].data[j];
+
+			Dwarf_Die tmp;
+			Dwarf_Off abbrev_off = 0;
+			dwarf_cu_die(pending_cu->cudie, &tmp, NULL, &abbrev_off, NULL, NULL, NULL, NULL);
 			cus->data[cus->size++] = (struct drgn_dwarf_index_cu){
 				.file = pending_cu->file,
 				.buf = pending_cu->buf,
@@ -2926,6 +2937,8 @@ drgn_dwarf_info_update_index(struct drgn_dwarf_index_state *state)
 					(uint64_t *)no_file_name_hashes,
 				.num_file_names =
 					array_size(no_file_name_hashes),
+				.num_abbrev_decls = abbrev_off,
+				.str_offsets = dwarf_cu_str_off(pending_cu->cudie),
 			};
 		}
 	}
