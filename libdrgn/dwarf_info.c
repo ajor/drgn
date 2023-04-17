@@ -9385,6 +9385,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 
 			/* Re-generate the cached namespace_name for the now-current namespace */
 			string_builder_clear(&iter->namespace_name);
+			// TODO should this stop 1-level early to avoid double adding name with code outside of loop below?
 			for (size_t i=0; i<namespace_iter_stack->size; i++) {
 				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[i].current;
 				Dwarf_Die die;
@@ -9418,10 +9419,6 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		 *
 		 * Update iterator state to operate on this new namespace
 		 */
-
-		/* Push next namespace iterator onto stack */
-		if (!dwarf_index_iterator_vector_append(namespace_iter_stack, next_namespace_iter))
-			return &drgn_enomem;
 
 		/* Append new namespace to cached namespace name */
 		Dwarf_Die ns_die;
