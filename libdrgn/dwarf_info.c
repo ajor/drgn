@@ -9371,8 +9371,8 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 
 			if (namespace_iter_stack->size <= 1) {
 				/*
-				 * The global namespace is always the bottom of the stack
-				 * If we've reached this point then We've exhausted the global namespace
+				 * Top level namespaces are at the bottom of the stack
+				 * If we've reached this point then we've exhausted the global namespace
 				 * => Iteration complete
 				 */
 				*ret = NULL;
@@ -9383,10 +9383,14 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 			// TODO deinit:
 			dwarf_index_iterator_vector_pop(namespace_iter_stack);
 
-			/* Re-generate the cached namespace_name for the now-current namespace */
+			/*
+			 * Re-generate the cached namespace_name for the now-current namespace
+			 *
+			 * Don't include the lowest-level namespace, as it will change at the end
+			 * of this loop and will be accounted for afterwards.
+			 */
 			string_builder_clear(&iter->namespace_name);
-			// TODO should this stop 1-level early to avoid double adding name with code outside of loop below?
-			for (size_t i=0; i<namespace_iter_stack->size; i++) {
+			for (size_t i=0; i<namespace_iter_stack->size - 1; i++) {
 				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[i].current;
 				Dwarf_Die die;
 				err = drgn_dwarf_index_get_die(ns_index_die, &die);
