@@ -9429,7 +9429,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 			}
 		}
 
-		{
+		{ // TODO remove debug:
 			if (namespace_iter_stack->size > 0) {
 				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[0].current;
 				if (ns_index_die) {
@@ -9485,6 +9485,26 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 			&iter->curr);
 	if (err)
 		return err;
+
+		{ // TODO remove debug:
+			if (namespace_iter_stack->size > 0) {
+				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[0].current;
+				if (ns_index_die) {
+					Dwarf_Die die;
+					err = drgn_dwarf_index_get_die(ns_index_die, &die);
+					if (err)
+						return err;
+
+					const char *ns_name;
+					err = drgn_dwarf_die_name(&die, &ns_name);
+					char c = ns_name[0];
+
+					char asdf[1024];
+					size_t len;
+					drgn_type_fully_qualified_name(iter->curr.type, &asdf, &len);
+				}
+			}
+		}
 
 	iter->curr.type->_private.namespace_name = string_builder_null_terminate(&iter->namespace_name); // TODO strcpy
 	*ret = &iter->curr;
