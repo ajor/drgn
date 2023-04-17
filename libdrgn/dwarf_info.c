@@ -9385,7 +9385,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 
 			/* Re-generate the cached namespace_name for the now-current namespace */
 			string_builder_clear(&iter->namespace_name);
-			for (size_t i=1; i<namespace_iter_stack->size; i++) {
+			for (size_t i=0; i<namespace_iter_stack->size; i++) {
 				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[i].current;
 				Dwarf_Die die;
 				err = drgn_dwarf_index_get_die(ns_index_die, &die);
