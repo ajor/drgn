@@ -9414,6 +9414,22 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 			next_namespace_iter = &namespace_iter_stack->data[namespace_iter_stack->size - 1];
 		}
 
+		{
+			if (namespace_iter_stack->size > 0) {
+				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[0].current;
+				if (ns_index_die) {
+					Dwarf_Die die;
+					err = drgn_dwarf_index_get_die(ns_index_die, &die);
+					if (err)
+						return err;
+
+					const char *ns_name;
+					err = drgn_dwarf_die_name(&die, &ns_name);
+					char c = ns_name[0];
+				}
+			}
+		}
+
 		/*
 		 * We've found a namespace
 		 *
