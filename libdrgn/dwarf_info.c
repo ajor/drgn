@@ -9499,9 +9499,14 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 					err = drgn_dwarf_die_name(&die, &ns_name);
 					char c = ns_name[0];
 
-					char asdf[1024];
+					char *fqname;
 					size_t len;
-//					drgn_type_fully_qualified_name(iter->curr.type, &asdf, &len);
+					drgn_type_fully_qualified_name(iter->curr.type, &fqname, &len);
+
+					if (fqname[0] != ns_name[0]) {
+						// mismatch!
+						char d = fqname[0];
+					}
 				}
 			}
 		}
