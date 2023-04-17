@@ -9370,7 +9370,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 			 * There are no more child namespaces within the current scope
 			 */
 
-			if (namespace_iter_stack->size <= 1) {
+			if (namespace_iter_stack->size <= 1) { // TODO change to 0??
 				/*
 				 * Top level namespaces are at the bottom of the stack
 				 * If we've reached this point then we've exhausted the global namespace
@@ -9501,7 +9501,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 
 					char asdf[1024];
 					size_t len;
-					drgn_type_fully_qualified_name(iter->curr.type, &asdf, &len);
+//					drgn_type_fully_qualified_name(iter->curr.type, &asdf, &len);
 				}
 			}
 		}
