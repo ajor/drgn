@@ -9312,21 +9312,6 @@ struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 	iter->prog = prog;
 
 	dwarf_index_iterator_vector_init(&iter->namespace_iter_stack);
-	struct drgn_dwarf_index_iterator *global_ns_iter = dwarf_index_iterator_vector_append_entry(&iter->namespace_iter_stack);
-	if (!global_ns_iter) {
-		dwarf_index_iterator_vector_deinit(&iter->namespace_iter_stack);
-		free(iter);
-		return &drgn_enomem;
-	}
-
-	struct drgn_namespace_dwarf_index *global_ns = &prog->dbinfo->dwarf.global;
-	err = drgn_dwarf_index_iterator_init(global_ns_iter, global_ns, NULL, 0,
-			&(uint64_t){DW_TAG_namespace}, 1);
-	if (err) {
-		dwarf_index_iterator_vector_deinit(&iter->namespace_iter_stack);
-		free(iter);
-		return err;
-	}
 
 	memset(&iter->namespace_name, 0, sizeof(iter->namespace_name));
 	string_builder_reserve(&iter->namespace_name, 128);
@@ -9363,8 +9348,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		 * Initialise new iterator for child namespaces of this namespace
 		 */
 		struct drgn_namespace_dwarf_index *curr_namespace;
-		if (namespace_iter_stack->size == 0 ||
-				namespace_iter_stack->data[namespace_iter_stack->size - 1].current == NULL)
+		if (namespace_iter_stack->size == 0)
 			curr_namespace = &iter->prog->dbinfo->dwarf.global;
 		else
 			curr_namespace = namespace_iter_stack->data[namespace_iter_stack->size - 1].current->namespace;
