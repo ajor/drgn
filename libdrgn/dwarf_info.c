@@ -9399,12 +9399,13 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		 * Update iterator state to operate on this new namespace
 		 */
 
-		if (namespaces_popped >= 1) {
+		if (true /*namespaces_popped > 0*/) { // TODO
 			/*
 			 * Re-generate the cached namespace_name for the now-current namespace
 			 *
-			 * Don't include the lowest-level namespace, as it will be accounted for
-			 * afterwards, regardless of whether we popped a namespace.
+			 * Don't append the name of the lowest-level namespace, as it will be
+			 * accounted for afterwards, regardless of whether or not we popped a
+			 * namespace.
 			 */
 			string_builder_clear(&iter->namespace_name);
 			for (size_t i=0; i<namespace_iter_stack->size - 1; i++) {
