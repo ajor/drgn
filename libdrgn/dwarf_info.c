@@ -9363,6 +9363,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		/*
 		 * Attempt to get the next child namespace
 		 */
+		int namespaces_popped = 0;
 		struct drgn_dwarf_index_die *next_namespace_index_die;
 		while (!(next_namespace_index_die = drgn_dwarf_index_iterator_next(next_namespace_iter))) {
 			/*
@@ -9382,12 +9383,28 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 			/* Pop from the namespace stack to resume iterating at the parent's level */
 			// TODO deinit:
 			dwarf_index_iterator_vector_pop(namespace_iter_stack);
+			namespaces_popped++;
 
+			/*
+			 * Restore iterator for children of the parent namespace
+			 *
+			 * i.e. siblings of the current namespace
+			 */
+			next_namespace_iter = &namespace_iter_stack->data[namespace_iter_stack->size - 1];
+		}
+
+		/*
+		 * We've found a namespace
+		 *
+		 * Update iterator state to operate on this new namespace
+		 */
+
+		if (namespaces_popped >= 1) {
 			/*
 			 * Re-generate the cached namespace_name for the now-current namespace
 			 *
-			 * Don't include the lowest-level namespace, as it will change at the end
-			 * of this loop and will be accounted for afterwards.
+			 * Don't include the lowest-level namespace, as it will be accounted for
+			 * afterwards, regardless of whether we popped a namespace.
 			 */
 			string_builder_clear(&iter->namespace_name);
 			for (size_t i=0; i<namespace_iter_stack->size - 1; i++) {
@@ -9409,13 +9426,6 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 				if (!string_builder_append(&iter->namespace_name, ns_name))
 					return &drgn_enomem;
 			}
-
-			/*
-			 * Restore iterator for children of the parent namespace
-			 *
-			 * i.e. siblings of the current namespace
-			 */
-			next_namespace_iter = &namespace_iter_stack->data[namespace_iter_stack->size - 1];
 		}
 
 		{
@@ -9433,12 +9443,6 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 				}
 			}
 		}
-
-		/*
-		 * We've found a namespace
-		 *
-		 * Update iterator state to operate on this new namespace
-		 */
 
 		/* Append new namespace to cached namespace name */
 		Dwarf_Die ns_die;
