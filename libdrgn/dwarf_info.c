@@ -9360,6 +9360,22 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		if (err)
 			return err;
 
+		struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[namespace_iter_stack->size - 1].current;
+		if (ns_index_die) {
+			Dwarf_Die die;
+			err = drgn_dwarf_index_get_die(ns_index_die, &die);
+			if (err)
+				return err;
+
+			const char *ns_name;
+			err = drgn_dwarf_die_name(&die, &ns_name);
+			char c = ns_name[0];
+			printf("entering namespace: %s\n", ns_name);
+		}
+		else {
+			printf("entering root namespace\n");
+		}
+
 		/*
 		 * Attempt to get the next child namespace
 		 */
@@ -9378,6 +9394,19 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 				 */
 				*ret = NULL;
 				return NULL;
+			}
+
+			{
+				struct drgn_dwarf_index_die *ns_index_die = namespace_iter_stack->data[namespace_iter_stack->size - 2].current;
+				Dwarf_Die die;
+				err = drgn_dwarf_index_get_die(ns_index_die, &die);
+				if (err)
+					return err;
+
+				const char *ns_name;
+				err = drgn_dwarf_die_name(&die, &ns_name);
+				char c = ns_name[0];
+				printf("leaving namespace: %s\n", ns_name);
 			}
 
 			/* Pop from the namespace stack to resume iterating at the parent's level */
