@@ -9507,6 +9507,10 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 						// mismatch!
 						char d = fqname[0];
 					}
+					else {
+						// match (maybe)
+						char d = fqname[0];
+					}
 				}
 			}
 		}
