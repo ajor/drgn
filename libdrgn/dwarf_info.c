@@ -9501,7 +9501,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 
 					char asdf[1024];
 					size_t len;
-//					drgn_type_fully_qualified_name(iter->curr.type, &asdf, &len);
+					drgn_type_fully_qualified_name(iter->curr.type, &asdf, &len);
 				}
 			}
 		}
