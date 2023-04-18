@@ -9274,12 +9274,17 @@ static const uint64_t type_tags[] = {
 
 #define TYPE_TAGS_LENGTH (sizeof(type_tags) / sizeof(*type_tags))
 
-DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index*)
+struct fully_qualified_namespace {
+	struct drgn_namespace_dwarf_index *namespace;
+	struct string_builder name;
+};
+
+DEFINE_VECTOR(fully_qualified_namespace_vector, struct fully_qualified_namespace)
 
 struct drgn_type_iterator {
 	struct drgn_program *prog;
 	struct drgn_dwarf_index_iterator it;
-	struct namespace_vector namespaces;
+	struct fully_qualified_namespace_vector namespaces;
 	struct drgn_qualified_type curr;
 };
 
@@ -9304,15 +9309,16 @@ struct drgn_error *drgn_type_iterator_create(struct drgn_program *prog,
 		return err;
 	}
 	iter->prog = prog;
-	namespace_vector_init(&iter->namespaces);
-	struct drgn_namespace_dwarf_index **namespace;
-	namespace = namespace_vector_append_entry(&iter->namespaces);
-	if (!namespace) {
-		namespace_vector_deinit(&iter->namespaces);
+	fully_qualified_namespace_vector_init(&iter->namespaces);
+	struct fully_qualified_namespace *fq_namespace;
+	fq_namespace = fully_qualified_namespace_vector_append_entry(&iter->namespaces);
+	if (!fq_namespace) {
+		fully_qualified_namespace_vector_deinit(&iter->namespaces);
 		free(iter);
 		return &drgn_enomem;
 	}
-	*namespace = &prog->dbinfo->dwarf.global;
+	fq_namespace->namespace = &prog->dbinfo->dwarf.global;
+	memset(&fq_namespace->name, 0, sizeof(fq_namespace->name));
 	*ret = iter;
 	return NULL;
 }
@@ -9321,7 +9327,7 @@ LIBDRGN_PUBLIC
 void drgn_type_iterator_destroy(struct drgn_type_iterator *iter)
 {
 	if (iter) {
-		namespace_vector_deinit(&iter->namespaces);
+		fully_qualified_namespace_vector_deinit(&iter->namespaces);
 		free(iter);
 	}
 }
@@ -9330,7 +9336,7 @@ LIBDRGN_PUBLIC
 struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 					   struct drgn_qualified_type **ret)
 {
-	struct namespace_vector *namespaces = &iter->namespaces;
+	struct fully_qualified_namespace_vector *namespaces = &iter->namespaces;
 	struct drgn_dwarf_index_die *index_die;
 	struct drgn_error *err;
 	while (!(index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
@@ -9341,28 +9347,51 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 		}
 
 		// Swap-remove the namespace we just finished processing
-		struct drgn_namespace_dwarf_index *prev_namespace =
-			namespaces->data[0];
+		struct fully_qualified_namespace prev_fq_namespace = namespaces->data[0];
 		namespaces->data[0] = namespaces->data[namespaces->size - 1];
-		namespace_vector_pop(namespaces);
+		fully_qualified_namespace_vector_pop(namespaces);
 
 		// If we've reached this point, we have gone through all of the types
-		// within `prev_namespace`, so we find all of the namespaces within it
+		// within `prev_fq_namespace`, so we find all of the namespaces within it
 		// here so that we can recursively process them.
 		err = drgn_dwarf_index_iterator_init(
-			&iter->it, prev_namespace, NULL, 0,
+			&iter->it, prev_fq_namespace.namespace, NULL, 0,
 			&(uint64_t){DW_TAG_namespace}, 1);
 		if (err)
 			return err;
 		while ((index_die = drgn_dwarf_index_iterator_next(&iter->it))) {
-			struct drgn_namespace_dwarf_index **next_namespace =
-				namespace_vector_append_entry(namespaces);
-			if (!next_namespace)
+			struct fully_qualified_namespace *next_fq_namespace =
+				fully_qualified_namespace_vector_append_entry(namespaces);
+			if (!next_fq_namespace)
 				return &drgn_enomem;
-			*next_namespace = index_die->namespace;
+
+			// TODO clean up
+			Dwarf_Die ns_die;
+			err = drgn_dwarf_index_get_die(index_die, &ns_die);
+			if (err)
+				return err;
+
+			const char *ns_name;
+			err = drgn_dwarf_die_name(&ns_die, &ns_name);
+			if (err)
+				return err;
+
+			next_fq_namespace->namespace = index_die->namespace;
+			memset(&next_fq_namespace->name, 0, sizeof(next_fq_namespace->name));
+			char *parent_fq_name = string_builder_null_terminate(&prev_fq_namespace.name);
+			if (!parent_fq_name)
+				return &drgn_enomem;
+			if (!string_builder_append(&next_fq_namespace->name, parent_fq_name))
+				return &drgn_enomem;
+			if (next_fq_namespace->name.len > 0) {
+				if (!string_builder_append(&next_fq_namespace->name, "::"))
+					return &drgn_enomem;
+			}
+			if (!string_builder_append(&next_fq_namespace->name, ns_name))
+				return &drgn_enomem;
 		}
 		if (namespaces->size == 0) {
-			// `prev_namespace` contained no other namespaces within it,
+			// `prev_fq_namespace` contained no other namespaces within it,
 			// ending the recursion.
 			*ret = NULL;
 			return NULL;
@@ -9370,7 +9399,7 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 
 		// Begin processing the next namespace
 		err = drgn_dwarf_index_iterator_init(&iter->it,
-						     namespaces->data[0], NULL,
+						     namespaces->data[0].namespace, NULL,
 						     0, type_tags,
 						     TYPE_TAGS_LENGTH);
 		if (err)
@@ -9384,6 +9413,12 @@ struct drgn_error *drgn_type_iterator_next(struct drgn_type_iterator *iter,
 				   &iter->curr);
 	if (err)
 		return err;
+
+	char *fq_namespace_name = string_builder_null_terminate(&namespaces->data[0].name);
+	if (!fq_namespace_name)
+		return &drgn_enomem;
+
+	iter->curr.type->_private.namespace_name = fq_namespace_name; // TODO strcpy
 	*ret = &iter->curr;
 	return NULL;
 }
@@ -9393,6 +9428,8 @@ static const uint64_t func_tags[] = {
 };
 
 #define FUNC_TAGS_LENGTH (sizeof(func_tags) / sizeof(*func_tags))
+
+DEFINE_VECTOR(namespace_vector, struct drgn_namespace_dwarf_index*)
 
 struct drgn_func_iterator {
 	struct drgn_program *prog;

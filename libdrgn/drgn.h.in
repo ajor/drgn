@@ -2077,6 +2077,7 @@ struct drgn_type {
 		struct drgn_module *module;
     size_t oi_size;
     const char *oi_name;
+		const char *namespace_name;
 		uint8_t virtuality;
 	} _private;
 };
