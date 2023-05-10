@@ -1189,7 +1189,7 @@ static struct drgn_error *read_abbrev_table(struct drgn_dwarf_index_cu *cu,
 	drgn_elf_file_section_buffer_init_index(&buffer, cu->file,
 						DRGN_SCN_DEBUG_ABBREV);
 	/* Checked in read_cu(). */
-	buffer.bb.pos += debug_abbrev_offset + cu->num_abbrev_decls;
+	buffer.bb.pos += debug_abbrev_offset;
 	struct uint32_vector decls = VECTOR_INIT;
 	struct uint8_vector insns = VECTOR_INIT;
 	for (;;) {
@@ -9167,4 +9167,3 @@ drgn_program_find_function_by_address(struct drgn_program *prog,
 	free(scopes);
 	return &drgn_not_found;
 }
-
