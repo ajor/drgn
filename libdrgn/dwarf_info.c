@@ -1284,6 +1284,9 @@ static struct drgn_error *read_cu(struct drgn_dwarf_index_cu_buffer *buffer)
 							   &debug_abbrev_offset)))
 			return err;
 	}
+	// TODO: This is super sketchy and we might be lucky this always work...
+	if (debug_abbrev_offset == 0)
+		debug_abbrev_offset += buffer->cu->num_abbrev_decls;
 	if (debug_abbrev_offset >
 	    buffer->cu->file->scn_data[DRGN_SCN_DEBUG_ABBREV]->d_size) {
 		return binary_buffer_error(&buffer->bb,
