@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 import os.path
+import math
 from typing import Any, NamedTuple, Optional, Sequence, Union
 
 from tests.assembler import _append_sleb128, _append_uleb128
-from tests.dwarf import DW_AT, DW_FORM, DW_TAG
+from tests.dwarf import DW_AT, DW_FORM, DW_SECT, DW_TAG
 from tests.elf import ET, SHT
 from tests.elfwriter import ElfSection, create_elf_file
 
@@ -57,7 +58,7 @@ def _compile_debug_abbrev(unit_dies, use_dw_form_indirect):
     return buf
 
 
-def _compile_debug_info(unit_dies, little_endian, bits, use_dw_form_indirect):
+def _compile_debug_info(unit_dies, little_endian, bits, use_dw_form_indirect, dwp):
     byteorder = "little" if little_endian else "big"
     all_labels = set()
     labels = {}
@@ -130,6 +131,25 @@ def _compile_debug_info(unit_dies, little_endian, bits, use_dw_form_indirect):
 
     debug_info = bytearray()
     debug_types = bytearray()
+    debug_cu_index = bytearray()
+
+    # Mapping: hash(dwo_id) -> (dwo_id, offset, size)
+    cu_index_hash_table = {}
+
+    if dwp:
+        # Set up debug_cu_index section header
+        N = 3
+        U = len([die for die in unit_dies if die.tag == DW_TAG.compile_unit])
+        # According to the DWARF-5 spec (7.3.5.3), S must be 2^k, where 2^k > 3*U/2
+        k = math.ceil(math.log2(3*U/2))
+        S = 2**k
+
+        debug_cu_index.extend((2).to_bytes(2, byteorder))  # Index version (not DWARF version)
+        debug_cu_index.extend((0).to_bytes(2, byteorder))  # padding
+        debug_cu_index.extend((N).to_bytes(4, byteorder))  # num columns
+        debug_cu_index.extend((U).to_bytes(4, byteorder))  # num used entries
+        debug_cu_index.extend((S).to_bytes(4, byteorder))  # num slots
+
     for die in unit_dies:
         labels.clear()
         relocations.clear()
@@ -156,7 +176,67 @@ def _compile_debug_info(unit_dies, little_endian, bits, use_dw_form_indirect):
         for offset, label in relocations:
             die_offset = labels[label] - orig_len
             buf[offset : offset + 4] = die_offset.to_bytes(4, byteorder)
-    return debug_info, debug_types
+
+        if dwp and die.tag == DW_TAG.compile_unit:
+            # Generate debug_cu_index hash table
+            def rep(X):
+                return X # TODO ensure this is in target byte order
+            def mask(k):
+                return (1<<k) - 1
+
+            # Not safe: (might throw exception)
+            X = [att.value for att in die.attribs if att.name == DW_AT.GNU_dwo_id][0]
+
+            h = rep(X) & mask(k)
+            h2 = (((rep(X) >> 32) & mask(k)) | 1)
+
+            while h in cu_index_hash_table and cu_index_hash_table[h][0] != X:
+                h = (h + h2) % S
+            cu_index_hash_table[h] = (X, orig_len, unit_length)
+
+    if dwp:
+        # Write cu_index hash table
+        for i in range(S):
+            if i in cu_index_hash_table:
+                X = cu_index_hash_table[i][0]
+                debug_cu_index.extend((X).to_bytes(8, byteorder))
+            else:
+                debug_cu_index.extend((0).to_bytes(8, byteorder))
+
+        # Write parallel index table
+        offset = 1
+        for i in range(S):
+            if i in cu_index_hash_table:
+                debug_cu_index.extend((offset).to_bytes(4, byteorder))
+                offset += 1
+            else:
+                debug_cu_index.extend((0).to_bytes(4, byteorder))
+
+        # Write offset table header
+        debug_cu_index.extend((DW_SECT.INFO).to_bytes(4, byteorder))
+        debug_cu_index.extend((DW_SECT.ABBREV).to_bytes(4, byteorder))
+        debug_cu_index.extend((DW_SECT.STR_OFFSETS).to_bytes(4, byteorder))
+
+        # Write offset table data
+        for i in range(S):
+            if i not in cu_index_hash_table:
+                continue
+            die_offset = cu_index_hash_table[i][1]
+            debug_cu_index.extend((die_offset).to_bytes(4, byteorder)) # info
+            debug_cu_index.extend((0).to_bytes(4, byteorder)) # abbrev
+            debug_cu_index.extend((0).to_bytes(4, byteorder)) # str_off
+
+        # Write size table data
+        for i in range(S):
+            if i not in cu_index_hash_table:
+                continue
+            die_size = cu_index_hash_table[i][2]
+            debug_cu_index.extend((die_size).to_bytes(4, byteorder)) # info
+            debug_cu_index.extend((0).to_bytes(4, byteorder)) # abbrev TODO
+            debug_cu_index.extend((0).to_bytes(4, byteorder)) # str_off TODO
+
+
+    return debug_info, debug_types, debug_cu_index
 
 
 def _compile_debug_line(unit_dies, little_endian):
@@ -232,7 +312,8 @@ _UNIT_TAGS = frozenset({DW_TAG.type_unit, DW_TAG.compile_unit})
 
 
 def dwarf_sections(
-    dies, little_endian=True, bits=64, *, lang=None, use_dw_form_indirect=False
+    dies, little_endian=True, bits=64, *, lang=None, use_dw_form_indirect=False,
+    dwp=False
 ):
     if isinstance(dies, DwarfDie):
         dies = (dies,)
@@ -259,8 +340,8 @@ def dwarf_sections(
         for die in unit_dies
     ]
 
-    debug_info, debug_types = _compile_debug_info(
-        unit_dies, little_endian, bits, use_dw_form_indirect
+    debug_info, debug_types, debug_cu_index = _compile_debug_info(
+        unit_dies, little_endian, bits, use_dw_form_indirect, dwp
     )
 
     sections = [
@@ -281,11 +362,16 @@ def dwarf_sections(
         sections.append(
             ElfSection(name=".debug_types", sh_type=SHT.PROGBITS, data=debug_types)
         )
+    if debug_cu_index:
+        sections.append(
+            ElfSection(name=".debug_cu_index", sh_type=SHT.PROGBITS, data=debug_cu_index)
+        )
     return sections
 
 
 def compile_dwarf(
-    dies, little_endian=True, bits=64, *, lang=None, use_dw_form_indirect=False
+    dies, little_endian=True, bits=64, *, lang=None, use_dw_form_indirect=False,
+    dwp=False
 ):
     return create_elf_file(
         ET.EXEC,
@@ -295,6 +381,7 @@ def compile_dwarf(
             bits=bits,
             lang=lang,
             use_dw_form_indirect=use_dw_form_indirect,
+            dwp=dwp,
         ),
         little_endian=little_endian,
         bits=bits,

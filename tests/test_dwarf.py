@@ -6574,7 +6574,7 @@ class TestProgram(TestCase):
                 DW_TAG.compile_unit,
                 (
                     DwarfAttrib(DW_AT.GNU_dwo_name, DW_FORM.string, "split_dwarf1.dwo"),
-                    DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0xDEADBEE1),
+                    DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0x11111111DEADBEE1),
                 ),
                 (),
             ),
@@ -6582,7 +6582,7 @@ class TestProgram(TestCase):
                 DW_TAG.compile_unit,
                 (
                     DwarfAttrib(DW_AT.GNU_dwo_name, DW_FORM.string, "split_dwarf2.dwo"),
-                    DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0xDEADBEE2),
+                    DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0x11111111DEADBEE2),
                 ),
                 (),
             ),
@@ -6592,7 +6592,7 @@ class TestProgram(TestCase):
             DW_TAG.compile_unit,
             (
                 DwarfAttrib(DW_AT.GNU_dwo_name, DW_FORM.string, "split_dwarf1.dwo"),
-                DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0xDEADBEE1),
+                DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0x11111111DEADBEE1),
             ),
             wrap_test_type_dies(
                 DwarfDie(
@@ -6632,9 +6632,28 @@ class TestProgram(TestCase):
             DW_TAG.compile_unit,
             (
                 DwarfAttrib(DW_AT.GNU_dwo_name, DW_FORM.string, "split_dwarf2.dwo"),
-                DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0xDEADBEE2),
+                DwarfAttrib(DW_AT.GNU_dwo_id, DW_FORM.data8, 0x11111111DEADBEE2),
             ),
             (
+                DwarfDie(
+                    DW_TAG.structure_type,
+                    (
+                        DwarfAttrib(DW_AT.name, DW_FORM.string, "second_type"),
+                        DwarfAttrib(DW_AT.byte_size, DW_FORM.data1, 4),
+                    ),
+                    (
+                        DwarfDie(
+                            DW_TAG.member,
+                            (
+                                DwarfAttrib(DW_AT.name, DW_FORM.string, "f"),
+                                DwarfAttrib(
+                                    DW_AT.data_member_location, DW_FORM.data1, 0
+                                    ),
+                                DwarfAttrib(DW_AT.type, DW_FORM.ref4, "float_die"),
+                            ),
+                        ),
+                    ),
+                ),
                 *labeled_float_die,
             ),
         )
@@ -6645,7 +6664,7 @@ class TestProgram(TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp:
-            dwp_prog = named_dwarf_program(tmp, "exe.dwp", dwp_dies)
+            dwp_prog = named_dwarf_program(tmp, "exe.dwp", dwp_dies, dwp=True)
             prog = named_dwarf_program(tmp, "exe", skeleton_dies)
 
             self.assertIdentical(
@@ -6660,8 +6679,13 @@ class TestProgram(TestCase):
                 ),
             )
 
-            # TODO this might not be the correct comparison:
             self.assertIdentical(
-                prog.type("float_die").type,
-                float_die
+                prog.type("struct second_type"),
+                prog.struct_type(
+                    "second_type",
+                    4,
+                    (
+                        TypeMember(prog.float_type("float", 4), "f", 0),
+                    ),
+                ),
             )
